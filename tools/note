@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+"""note — a trivial example tool: the agent's scratch notebook.
+
+This exists to show what a "tool" IS: a small CLI script your agent shells out
+to. Nothing more. Your real tools (drive an API, search a log, query a chain,
+delegate a build) follow this exact shape — a verb, some args, plain-text out.
+
+  note add "remember to water the plants"
+  note list
+  note clear
+"""
+import os
+import sys
+
+NOTES = os.path.expanduser(os.environ.get("NOTE_FILE", "~/.claude-p-agent-notes.txt"))
+
+
+def main():
+    args = sys.argv[1:]
+    cmd = args[0] if args else "list"
+
+    if cmd == "add":
+        text = " ".join(args[1:]).strip()
+        if not text:
+            sys.exit('usage: note add "<text>"')
+        with open(NOTES, "a", encoding="utf-8") as f:
+            f.write(text + "\n")
+        print("noted.")
+    elif cmd == "list":
+        try:
+            with open(NOTES, encoding="utf-8") as f:
+                body = f.read().strip()
+            print(body or "(no notes yet)")
+        except FileNotFoundError:
+            print("(no notes yet)")
+    elif cmd == "clear":
+        try:
+            os.remove(NOTES)
+        except FileNotFoundError:
+            pass
+        print("cleared.")
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main()

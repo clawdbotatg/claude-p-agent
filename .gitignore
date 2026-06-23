@@ -1,0 +1,12 @@
+# secrets — never commit
+.env
+
+# runtime / caches
+*.pyc
+__pycache__/
+.DS_Store
+
+# example tool runtime state (tokens, registries, logs the agent generates)
+*.token.json
+.*-token.json
+*-log.jsonl

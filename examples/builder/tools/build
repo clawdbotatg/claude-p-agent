@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""build — the agent's hands: build software by spawning a Claude Code session.
+
+The agent does NOT write code during its own chat turn. It DELEGATES: it spawns a
+fresh, top-level `claude` session in a target directory, hands it a task, and reads
+back what changed. Claude Code is the hands; the agent (`claude -p`) is the loop
+that decides what to build and reports back.
+
+Why a separate session instead of just editing files in the turn?
+  • Isolation — the build runs in its own dir (or a throwaway git worktree), so a
+    risky change can't scribble on the agent's own files mid-conversation.
+  • Observability — it's a real session you can watch, with its own transcript.
+  • Billing — a child `claude` only stays on YOUR subscription if the embedded-mode
+    env vars are scrubbed first (the same gotcha agent.py documents). We scrub here.
+
+Self-improvement falls out for free: point it at the agent's OWN directory and the
+agent rewrites itself — `build run . "add a tool that checks the weather"`. The
+trust model already makes this safe: building changes code, so it's private-only
+(see prompts/public.md). A public message physically can't reach this tool.
+
+  build run <dir> "<task>"           run a task to completion in <dir>, print summary
+  build worktree <repo> "<task>"     run in a throwaway git worktree of <repo>;
+                                     leaves a branch for you to review, nothing merged
+
+This is the generic shape. A production version might stream progress, answer the
+session's follow-up questions, or route through a session manager — but the core is
+just "spawn claude in a dir, env scrubbed, with a task."
+"""
+import os
+import subprocess
+import sys
+
+# Same scrub as agent.py: without this a nested `claude` detects it's "embedded",
+# switches to metered API billing, and writes no transcript. Keep it.
+SCRUB_PREFIXES = ("CLAUDECODE", "CLAUDE_CODE_")
+SCRUB_EXACT = {"ANTHROPIC_API_KEY"}
+
+# acceptEdits lets the worker write/edit without a human approving each diff —
+# right for an autonomous build. Tighten with your own --disallowedTools if a
+# given task shouldn't touch the network or run arbitrary shell.
+WORKER_FLAGS = ["--permission-mode", "acceptEdits"]
+
+
+def die(msg):
+    sys.exit(f"build: {msg}")
+
+
+def scrubbed_env():
+    env = dict(os.environ)
+    for k in list(env):
+        if k in SCRUB_EXACT or any(k.startswith(p) for p in SCRUB_PREFIXES):
+            env.pop(k, None)
+    return env
+
+
+def run_claude(cwd, task):
+    """Spawn one headless `claude` session in cwd to do `task`. Returns its summary."""
+    claude = os.environ.get("CLAUDE_BIN", "claude")
+    proc = subprocess.run(
+        [claude, "-p", *WORKER_FLAGS, task],
+        cwd=cwd, env=scrubbed_env(), capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        die((proc.stderr or proc.stdout or "claude failed").strip())
+    return proc.stdout.strip()
+
+
+def cmd_run(args):
+    if len(args) < 2:
+        die('usage: build run <dir> "<task>"')
+    cwd = os.path.abspath(os.path.expanduser(args[0]))
+    task = " ".join(args[1:])
+    if not os.path.isdir(cwd):
+        die(f"{cwd} is not a directory")
+    print(run_claude(cwd, task))
+
+
+def cmd_worktree(args):
+    if len(args) < 2:
+        die('usage: build worktree <repo> "<task>"')
+    repo = os.path.abspath(os.path.expanduser(args[0]))
+    task = " ".join(args[1:])
+    if not os.path.isdir(os.path.join(repo, ".git")):
+        die(f"{repo} is not a git repo")
+
+    # A short branch/worktree name derived from the task — no clock/random needed.
+    slug = "build-" + "-".join(task.lower().split()[:4])
+    slug = "".join(c for c in slug if c.isalnum() or c == "-")[:40] or "build-task"
+    wt = os.path.join(repo, ".worktrees", slug)
+
+    r = subprocess.run(["git", "-C", repo, "worktree", "add", "-b", slug, wt],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        die(f"git worktree add failed: {r.stderr.strip()}")
+    try:
+        summary = run_claude(wt, task)
+    finally:
+        # Leave the worktree + branch in place for review; just report where it is.
+        pass
+    print(summary)
+    print(f"\n[worktree: {wt}  branch: {slug}]  review it, then merge or "
+          f"`git -C {repo} worktree remove {wt}` to discard.", file=sys.stderr)
+
+
+VERBS = {"run": cmd_run, "worktree": cmd_worktree}
+
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help", "help"):
+        print(__doc__)
+        return
+    fn = VERBS.get(args[0])
+    if not fn:
+        die(f"unknown verb '{args[0]}' (try: {', '.join(VERBS)})")
+    fn(args[1:])
+
+
+if __name__ == "__main__":
+    main()
