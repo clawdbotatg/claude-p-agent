@@ -15,7 +15,8 @@ Adapters (terminal, web, voice, Telegram, …) are thin: they decide WHERE a
 message came from and how much to trust it, then call run_turn(). They never
 need to know anything about Claude.
 
-Config via environment (all optional — sensible defaults):
+Config via environment, or a `.env` file in the repo root (auto-loaded; real
+environment variables take precedence). All optional — sensible defaults:
   AGENT_DIR        the agent's working dir / persona home   (default: this file's dir)
   BRAIN_DIRS       extra readable dirs, ':'-separated → --add-dir   (default: none)
   CLAUDE_BIN       path to the claude CLI                    (default: "claude")
@@ -28,6 +29,30 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _load_env_file(path):
+    """Minimal .env loader: `KEY=VALUE` lines → os.environ. No dependency, and a
+    value already set in the real environment WINS (setdefault), so .env is a
+    default, not an override. Without this, the .env the README tells you to
+    create — including the CLAUDE_ARGS_PUBLIC trust-lock — would do nothing."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key = key.strip()
+                val = val.strip().strip('"').strip("'")
+                if key:
+                    os.environ.setdefault(key, val)
+    except FileNotFoundError:
+        pass
+
+
+_load_env_file(os.path.join(HERE, ".env"))
+
 AGENT_DIR = os.path.abspath(os.environ.get("AGENT_DIR", HERE))
 PROMPTS_DIR = os.path.join(HERE, "prompts")
 
