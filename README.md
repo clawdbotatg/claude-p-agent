@@ -16,7 +16,7 @@ You need the [`claude` CLI](https://docs.claude.com/en/docs/claude-code) on a
 Claude subscription (OAuth, not an API key).
 
 ```bash
-git clone <this repo> && cd claude-p-agent
+git clone https://github.com/clawdbotatg/claude-p-agent && cd claude-p-agent
 cp CLAUDE.md.example CLAUDE.md   # your agent's persona — gitignored, yours to edit
 cp .env.example .env             # optional; defaults work out of the box
 python3 adapters/cli.py          # talk to the default agent in your terminal
@@ -82,6 +82,27 @@ thesis in one turn.
 | **`tools/`** | CLI scripts the agent shells out to — the whole "tool API." `tools/local/` holds your private ones (gitignored). |
 | **`examples/builder/`** | a self-improving agent that builds via Claude Code sessions — the worked example. |
 | **`.env`** | secrets + config (gitignored). `.env.example` lists every knob. |
+
+## In production
+
+The terminal adapter is the hello-world. A real deployment of this pattern keeps
+the agent identical — still `claude -p` in a directory with a `CLAUDE.md` — and adds
+three long-lived pieces around the same `run_turn()` core:
+
+- **A persistent adapter process** — a voice loop, web server, or chat bridge that
+  stays up, authenticates each message's source, maps it to a trust level, and hands
+  it to the agent. The terminal REPL is the trivial version of this.
+- **A worker/session manager** — the service the build tool delegates to, so each
+  build runs as an observable, isolated `claude` session instead of inline. The
+  generic `tools/build` spawns sessions directly; at scale you point it at a manager
+  that tracks and supervises them.
+- **Brain/notes dirs mounted read-only** — long-term identity and knowledge the
+  agent reads each turn via `--add-dir` (`BRAIN_DIRS`), kept outside the repo so the
+  persona stays small and the knowledge stays private.
+
+Nothing about the agent changes across these — only the adapter and the tools do.
+That's the point: the same `CLAUDE.md` + tools run behind a terminal, a phone call,
+or a chat bot.
 
 ## Self-improvement
 
