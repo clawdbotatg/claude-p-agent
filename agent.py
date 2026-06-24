@@ -8,7 +8,7 @@ make it happen; everything else in the repo is config plugged into it.
 A turn:
   1. pick a system prompt by trust level  (prompts/public.md | prompts/private.md)
   2. scrub the environment                (so the child runs on YOUR subscription)
-  3. spawn `claude -p` with this dir as cwd → Claude Code loads AGENT.md as persona
+  3. spawn `claude -p` with this dir as cwd → Claude Code auto-loads CLAUDE.md as persona
   4. hand back what it said
 
 Adapters (terminal, web, voice, Telegram, …) are thin: they decide WHERE a
@@ -57,7 +57,7 @@ def _read_prompt(trust):
         with open(path, encoding="utf-8") as f:
             return f.read().strip()
     except FileNotFoundError:
-        return ""  # no per-channel prompt is fine; AGENT.md still carries persona
+        return ""  # no per-channel prompt is fine; CLAUDE.md still carries persona
 
 
 def _extra_args(trust):

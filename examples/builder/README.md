@@ -14,11 +14,11 @@ this repo turned up to its logical end:
   work, in isolation, on your subscription.
 - **Self-improvement is the same move, pointed inward.** `build run . "<task>"`
   aims builder's hands at its own directory — so it writes its own new tools and
-  edits its own `AGENT.md`. The agent that builds software can build *itself*.
+  edits its own `CLAUDE.md`. The agent that builds software can build *itself*.
 
 ## What to look at
 
-- **`AGENT.md`** — the persona. Note the order: *identity* first ("a senior
+- **`CLAUDE.md`** — the persona. Note the order: *identity* first ("a senior
   engineer who ships"), then the self-improvement framing, then tools, then the
   channel/trust model. And notice how self-improvement and the trust model fit
   together: changing code is a **private-only** power, so the same boundary that

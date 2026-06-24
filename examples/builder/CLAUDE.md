@@ -1,5 +1,5 @@
 <!--
-  examples/builder/AGENT.md — a worked example of the template, fully generic.
+  examples/builder/CLAUDE.md — a worked example of the template, fully generic.
 
   "builder" is a self-improving agent: you talk to it, and it builds software for
   you by spawning Claude Code sessions — including improving its OWN tools and this

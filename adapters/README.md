@@ -30,7 +30,7 @@ once, each mapping its source to the right trust level.
 A web adapter, a Telegram bot, a voice loop — all the same shape. Authenticate
 the source however that medium allows (a token, a signature, a known chat id),
 map "authenticated as owner" → `private` and everything else → `public`, then
-call `run_turn`. Keep auth in the adapter; keep persona in `AGENT.md`; keep the
+call `run_turn`. Keep auth in the adapter; keep persona in `CLAUDE.md`; keep the
 trust *policy* in `prompts/`.
 
 > Tip: the trust split is only as strong as its weakest enforcement. The

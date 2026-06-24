@@ -1,6 +1,17 @@
 # secrets — never commit
 .env
 
+# your real persona — gitignored so personality changes never hit the public repo.
+# Only the ROOT one is private; CLAUDE.md.example is the committed template, and
+# examples/*/CLAUDE.md are committed (generic). The leading slash anchors to root.
+/CLAUDE.md
+
+# private tool overlay — your agent-specific tools (and their runtime state) live
+# here and are never committed. Generic, shareable tools go in tools/ directly and
+# ARE committed. Only the convention's README is tracked.
+tools/local/*
+!tools/local/README.md
+
 # runtime / caches
 *.pyc
 __pycache__/

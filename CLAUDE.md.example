@@ -1,14 +1,23 @@
 <!--
-  AGENT.md — your agent's persona and operating manual.
+  CLAUDE.md.example — the committed template for your agent's persona.
 
-  Claude Code automatically loads the CLAUDE.md / AGENT.md in its working
-  directory as system context. So THIS FILE is your agent: who it is, what it
-  can do, and what it must never do. Fill in the TODOs and delete this comment.
+  HOW TO USE: copy this to CLAUDE.md (which is gitignored), then make it yours.
 
-  Keep secrets OUT of this file — it is committed. Secrets go in .env (gitignored)
-  and are referenced here by name only (e.g. "the API key in $SERVICE_TOKEN").
+      cp CLAUDE.md.example CLAUDE.md
 
-  For a complete, worked example, see examples/builder/AGENT.md.
+  WHY this split: Claude Code automatically loads CLAUDE.md from its working
+  directory as system context — so the CLAUDE.md sitting next to agent.py IS your
+  agent's persona, loaded every turn with no wiring. Keeping the real one
+  gitignored means your agent's identity, voice, and private operating rules never
+  land in the (public) repo. Changes are then always one of two things: generic
+  engine/tool code (committed) or personality (your uncommitted CLAUDE.md). This
+  file, CLAUDE.md.example, is the version a fresh cloner sees.
+
+  Keep secrets OUT of CLAUDE.md too — it may reference notes/brain dirs that ARE
+  private, but secrets themselves go in .env (gitignored) and are named here only
+  (e.g. "the API key in $SERVICE_TOKEN"). Fill in the TODOs and delete this comment.
+
+  For a complete, worked example, see examples/builder/CLAUDE.md.
 -->
 
 # You are <AGENT NAME>
@@ -51,5 +60,7 @@ TODO: tone, length, formatting rules.
 ## Context you can read
 
 <!-- Point at notes/knowledge dirs added via BRAIN_DIRS in .env. The agent can
-     read these every turn — use them instead of answering from nothing. -->
+     read these every turn — use them instead of answering from nothing. Because
+     this file IS auto-loaded as CLAUDE.md, you can also @import them directly,
+     e.g.  @/abs/path/to/notes/soul.md  — the import expands inline each turn. -->
 - TODO: where your agent's longer-term notes / knowledge live.

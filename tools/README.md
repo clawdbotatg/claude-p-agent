@@ -5,7 +5,7 @@ There is no plugin API, no registration, no schema. If your agent can run it in
 a shell and read its output, it's a tool.
 
 Why this works: Claude Code already has a Bash tool. So "giving your agent a new
-capability" is just "writing a script and mentioning it in `AGENT.md`." The
+capability" is just "writing a script and mentioning it in `CLAUDE.md`." The
 agent reads the description, runs the command, reads the result.
 
 ## The shape
@@ -31,10 +31,19 @@ it spawns a fresh Claude Code session in a directory to build software (and, poi
 at the agent's own dir, to improve the agent itself). Same shape, the most
 interesting job: your agent's hands.
 
+## Shared vs. private tools
+
+- **`tools/`** (here) — generic, shareable tools that carry no private endpoints.
+  Committed.
+- **`tools/local/`** — your agent's private tools: ones tied to your accounts,
+  services, or host. **Gitignored**, so they never reach the (public) repo. See
+  `tools/local/README.md`. Reference them from your `CLAUDE.md` by path, e.g.
+  `tools/local/<name>` — wiring is identical.
+
 ## Wiring a tool in
 
 1. Drop the script in `tools/`, make it executable (`chmod +x`).
-2. Describe it in `AGENT.md` under "your tools" — name, what it does, when to
+2. Describe it in `CLAUDE.md` under "your tools" — name, what it does, when to
    use it. That description is the only thing that tells the agent it exists.
 3. If it needs secrets, add them to `.env` (and `.env.example`) and read them
    from the environment.
