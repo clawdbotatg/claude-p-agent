@@ -12,6 +12,7 @@ your own keyboard). Pass --public to feel the untrusted-channel behavior.
 """
 import itertools
 import os
+import re
 import sys
 import threading
 import time
@@ -61,6 +62,51 @@ class Spinner:
         return False
 
 
+USER_COLOR = "\033[36m"   # cyan — what you type
+AGENT_COLOR = "\033[32m"  # green — what the agent says
+RESET = "\033[0m"
+
+
+def render_markdown(text):
+    """Render the common markdown the agent emits to ANSI for a terminal.
+
+    The agent replies in markdown; printed raw it shows literal `**`, `#`, and
+    backticks. This is a deliberately small, stdlib-only renderer (the project
+    has no deps) covering headers, bold/italic, inline + fenced code, and
+    bullet/numbered lists — enough to read clean in a terminal. Anything it
+    doesn't recognize passes through untouched, so it never mangles output.
+    """
+    B, I, C, H = "\033[1m", "\033[3m", "\033[96m", "\033[1m\033[4m"
+    R = "\033[0m"
+
+    def inline(s):
+        s = re.sub(r"`([^`]+)`", lambda m: f"{C}{m.group(1)}{R}", s)          # `code`
+        s = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)",
+                   lambda m: f"{m.group(1)} \033[2m{m.group(2)}{R}", s)        # [text](url)
+        s = re.sub(r"\*\*([^*]+)\*\*", lambda m: f"{B}{m.group(1)}{R}", s)     # **bold**
+        s = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", lambda m: f"{I}{m.group(1)}{R}", s)  # *italic*
+        return s
+
+    out, in_fence = [], False
+    for line in text.split("\n"):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            out.append(f"{C}    {line}{R}")
+            continue
+        m = re.match(r"^(#{1,6})\s+(.*)", line)
+        if m:
+            out.append(f"{H}{inline(m.group(2))}{R}")
+            continue
+        m = re.match(r"^(\s*)[-*+]\s+(.*)", line)
+        if m:
+            out.append(f"{m.group(1)}• {inline(m.group(2))}")
+            continue
+        out.append(inline(line))
+    return "\n".join(out)
+
+
 def main():
     trust = "public" if "--public" in sys.argv[1:] else "private"
 
@@ -71,11 +117,19 @@ def main():
             print(run_turn(msg, trust))
         return
 
+    # Only colorize on a real tty; piped/redirected output stays clean.
+    color = sys.stdout.isatty()
+    uc, ac, rs = (USER_COLOR, AGENT_COLOR, RESET) if color else ("", "", "")
+
     print(f"claude-p-agent · {trust} channel · ctrl-d to quit")
     while True:
         try:
-            msg = input("\nyou › ").strip()
+            # Open the color before the prompt so the line you type is colored
+            # too; reset right after so nothing else inherits it.
+            msg = input(f"\n{uc}you › ").strip()
+            sys.stdout.write(rs)
         except (EOFError, KeyboardInterrupt):
+            sys.stdout.write(rs)
             print()
             return
         if not msg:
@@ -83,7 +137,10 @@ def main():
         try:
             with Spinner():
                 reply = run_turn(msg, trust)
-            print(f"\nagent › {reply}")
+            # On a tty, render markdown to ANSI; the styling owns the body's
+            # color, so only the label gets the agent green.
+            body = render_markdown(reply) if color else reply
+            print(f"\n{ac}agent ›{rs} {body}")
         except Exception as e:
             print(f"\n[error] {e}", file=sys.stderr)
 
