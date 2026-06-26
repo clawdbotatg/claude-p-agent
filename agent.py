@@ -152,23 +152,34 @@ def _run_streaming(cmd, on_event):
     err_thread.start()
 
     final = ""
-    for line in proc.stdout:
-        line = line.strip()
-        if not line:
-            continue
+    try:
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue  # non-JSON noise on stdout — skip, never crash the turn
+            if event.get("type") == "result":
+                final = (event.get("result") or "").strip()
+            try:
+                on_event(event)
+            except Exception:
+                pass  # a rendering hiccup must never kill the turn
+        proc.wait()
+    except KeyboardInterrupt:
+        # Ctrl+C mid-turn: don't orphan the child `claude` (it'd keep running on
+        # your subscription). Terminate it, give it a beat to exit, then re-raise
+        # so the adapter can return to its prompt instead of crashing.
+        proc.terminate()
         try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue  # non-JSON noise on stdout — skip, never crash the turn
-        if event.get("type") == "result":
-            final = (event.get("result") or "").strip()
-        try:
-            on_event(event)
-        except Exception:
-            pass  # a rendering hiccup must never kill the turn
-
-    proc.wait()
-    err_thread.join(timeout=1)
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        raise
+    finally:
+        err_thread.join(timeout=1)
     if proc.returncode != 0:
         err = "".join(stderr_chunks).strip()
         raise RuntimeError(f"claude exited {proc.returncode}: {err}")

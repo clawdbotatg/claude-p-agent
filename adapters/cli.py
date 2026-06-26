@@ -149,10 +149,14 @@ def main():
             # too; reset right after so nothing else inherits it.
             msg = input(f"\n{uc}you › ").strip()
             sys.stdout.write(rs)
-        except (EOFError, KeyboardInterrupt):
+        except EOFError:  # ctrl-d → quit (as the banner says)
             sys.stdout.write(rs)
             print()
             return
+        except KeyboardInterrupt:  # ctrl-c at the prompt → clear the line, stay
+            sys.stdout.write(rs)
+            print("^C")
+            continue
         if not msg:
             continue
         try:
@@ -166,6 +170,8 @@ def main():
             if not state["prose"] and reply:
                 body = render_markdown(reply) if color else reply
                 print(f"\n{ac}agent ›{rs} {body}")
+        except KeyboardInterrupt:  # ctrl-c mid-turn → abort it, back to the prompt
+            print(f"\n{DIM}  ⏹ turn aborted{rs}")
         except Exception as e:
             print(f"\n[error] {e}", file=sys.stderr)
 
