@@ -10,61 +10,82 @@ your own keyboard). Pass --public to feel the untrusted-channel behavior.
   python3 adapters/cli.py --public    # simulate an untrusted channel
   echo "hi" | python3 adapters/cli.py # one-shot via stdin
 """
-import itertools
 import os
 import re
 import sys
-import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent import run_turn  # noqa: E402
 
 
-class Spinner:
-    """A braille spinner on stderr while a turn runs. A turn is one blocking
-    `subprocess.run`, so without this the terminal sits silent — you can't tell
-    thinking from hung. Only animates on a real tty; a no-op otherwise so
-    piped/one-shot output stays clean. Use as a context manager."""
-
-    FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-
-    def __init__(self, label="thinking", stream=sys.stderr):
-        self.label = label
-        self.stream = stream
-        self.enabled = stream.isatty()
-        self._stop = threading.Event()
-        self._thread = None
-
-    def _spin(self):
-        start = time.monotonic()
-        for frame in itertools.cycle(self.FRAMES):
-            if self._stop.is_set():
-                break
-            elapsed = time.monotonic() - start
-            self.stream.write(f"\r\033[90m{frame} {self.label}… {elapsed:4.1f}s\033[0m")
-            self.stream.flush()
-            time.sleep(0.08)
-
-    def __enter__(self):
-        if self.enabled:
-            self._thread = threading.Thread(target=self._spin, daemon=True)
-            self._thread.start()
-        return self
-
-    def __exit__(self, *exc):
-        self._stop.set()
-        if self._thread:
-            self._thread.join()
-        if self.enabled:
-            self.stream.write("\r\033[2K")  # erase the spinner line
-            self.stream.flush()
-        return False
-
-
 USER_COLOR = "\033[36m"   # cyan — what you type
 AGENT_COLOR = "\033[32m"  # green — what the agent says
 RESET = "\033[0m"
+DIM = "\033[90m"          # grey — the live activity log (one line per action)
+
+
+def summarize_tool(name, inp):
+    """A short, human label for a tool call — the meat of each activity line.
+    Picks the most identifying field per tool (the file, the command, the
+    query) so the log reads `Read cli.py` / `Bash run tests`, not raw JSON."""
+    inp = inp or {}
+    if name == "Bash":
+        return inp.get("description") or (inp.get("command", "").splitlines() or [""])[0]
+    if name in ("Read", "Edit", "Write", "NotebookEdit"):
+        path = inp.get("file_path") or inp.get("notebook_path") or ""
+        return os.path.basename(path) or path
+    if name in ("Grep", "Glob"):
+        return inp.get("pattern", "")
+    if name in ("Task", "Agent"):
+        return inp.get("description") or inp.get("subagent_type", "")
+    if name == "Skill":
+        return inp.get("skill") or inp.get("command", "")
+    if name == "WebFetch":
+        return inp.get("url", "")
+    if name == "WebSearch":
+        return inp.get("query", "")
+    if name == "TodoWrite":
+        return "update todos"
+    for k, v in inp.items():  # fallback: first field, truncated
+        return f"{k}={str(v)[:50]}"
+    return ""
+
+
+def make_renderer(color):
+    """Build an on_event callback that prints the turn as it happens: a dim line
+    per tool call, the agent's prose in green as each chunk arrives. Returns
+    (callback, state) where state['prose'] says whether any reply text printed —
+    so the caller can fall back to printing the final string if the stream was
+    silent (e.g. a turn that ended without an assistant text block)."""
+    dim, ac, rs = (DIM, AGENT_COLOR, RESET) if color else ("", "", "")
+    start = time.monotonic()
+    state = {"prose": False, "labeled": False}
+
+    def on_event(ev):
+        if ev.get("type") != "assistant":
+            return
+        elapsed = time.monotonic() - start
+        for block in ev.get("message", {}).get("content", []):
+            btype = block.get("type")
+            if btype == "tool_use":
+                name = block.get("name", "?")
+                summ = summarize_tool(name, block.get("input"))
+                tail = f"  {summ}" if summ else ""
+                print(f"{dim}  ⏺ {name}{tail}  ({elapsed:.1f}s){rs}")
+            elif btype == "text":
+                txt = block.get("text", "").strip()
+                if not txt:
+                    continue
+                body = render_markdown(txt) if color else txt
+                if not state["labeled"]:
+                    print(f"\n{ac}agent ›{rs} {body}")
+                    state["labeled"] = True
+                else:
+                    print(body)
+                state["prose"] = True
+
+    return on_event, state
 
 
 def render_markdown(text):
@@ -135,12 +156,16 @@ def main():
         if not msg:
             continue
         try:
-            with Spinner():
-                reply = run_turn(msg, trust)
-            # On a tty, render markdown to ANSI; the styling owns the body's
-            # color, so only the label gets the agent green.
-            body = render_markdown(reply) if color else reply
-            print(f"\n{ac}agent ›{rs} {body}")
+            # Stream the turn: a dim line per tool call, prose in green as it
+            # lands — so you watch the work happen instead of staring at a
+            # spinner and getting a wall of text at the end.
+            on_event, state = make_renderer(color)
+            reply = run_turn(msg, trust, on_event=on_event)
+            # Fallback: if the stream carried no assistant text (rare), still
+            # show the final reply so a turn is never silent.
+            if not state["prose"] and reply:
+                body = render_markdown(reply) if color else reply
+                print(f"\n{ac}agent ›{rs} {body}")
         except Exception as e:
             print(f"\n[error] {e}", file=sys.stderr)
 
