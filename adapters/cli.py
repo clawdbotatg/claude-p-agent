@@ -10,9 +10,11 @@ your own keyboard). Pass --public to feel the untrusted-channel behavior.
   python3 adapters/cli.py --public    # simulate an untrusted channel
   echo "hi" | python3 adapters/cli.py # one-shot via stdin
 """
+import itertools
 import os
 import re
 import sys
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -23,6 +25,71 @@ USER_COLOR = "\033[36m"   # cyan — what you type
 AGENT_COLOR = "\033[32m"  # green — what the agent says
 RESET = "\033[0m"
 DIM = "\033[90m"          # grey — the live activity log (one line per action)
+
+
+class Spinner:
+    """A braille spinner with live elapsed, drawn on the current line while a
+    turn is in flight. The stream prints a line per tool call, but between those
+    events the model is thinking with nothing to show — without this the terminal
+    sits silent and you can't tell thinking from hung. The spinner fills that gap:
+    it ticks on its own thread, and the renderer routes every printed line through
+    `emit()` so the spinner is wiped clean just before a line lands, then redrawn
+    underneath it. Only animates on a real tty; a no-op when piped so one-shot
+    output stays clean. Use as a context manager."""
+
+    FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def __init__(self, label="thinking", stream=sys.stdout):
+        self.label = label
+        self.stream = stream
+        self.enabled = stream.isatty()
+        self._lock = threading.Lock()  # serialize spinner draws against emit()
+        self._stop = threading.Event()
+        self._thread = None
+        self._start = 0.0
+        self._drawn = False  # is the spinner currently occupying the line?
+
+    def _clear(self):
+        if self._drawn:
+            self.stream.write("\r\033[2K")  # carriage-return + erase line
+            self._drawn = False
+
+    def _spin(self):
+        for frame in itertools.cycle(self.FRAMES):
+            if self._stop.is_set():
+                break
+            elapsed = time.monotonic() - self._start
+            with self._lock:
+                if not self._stop.is_set():
+                    self.stream.write(f"\r{DIM}{frame} {self.label}… {elapsed:4.1f}s{RESET}")
+                    self.stream.flush()
+                    self._drawn = True
+            time.sleep(0.1)
+
+    def emit(self, text):
+        """Print a finished line through the spinner: wipe the spinner, write the
+        line, and let the next tick redraw beneath it. Thread-safe."""
+        with self._lock:
+            self._clear()
+            self.stream.write(text + "\n")
+            self.stream.flush()
+
+    def __enter__(self):
+        if self.enabled:
+            self._start = time.monotonic()
+            self._thread = threading.Thread(target=self._spin, daemon=True)
+            self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        if self._thread:
+            self._thread.join()
+        if self.enabled:
+            with self._lock:
+                self._clear()
+                self.stream.flush()
+        return False
 
 
 def summarize_tool(name, inp):
@@ -52,12 +119,13 @@ def summarize_tool(name, inp):
     return ""
 
 
-def make_renderer(color):
+def make_renderer(color, emit=print):
     """Build an on_event callback that prints the turn as it happens: a dim line
-    per tool call, the agent's prose in green as each chunk arrives. Returns
-    (callback, state) where state['prose'] says whether any reply text printed —
-    so the caller can fall back to printing the final string if the stream was
-    silent (e.g. a turn that ended without an assistant text block)."""
+    per tool call, the agent's prose in green as each chunk arrives. Lines go out
+    through `emit` (the Spinner's, on a tty) so each one wipes the live spinner
+    before it lands. Returns (callback, state) where state['prose'] says whether
+    any reply text printed — so the caller can fall back to printing the final
+    string if the stream was silent (e.g. a turn that ended without a text block)."""
     dim, ac, rs = (DIM, AGENT_COLOR, RESET) if color else ("", "", "")
     start = time.monotonic()
     state = {"prose": False, "labeled": False}
@@ -72,17 +140,17 @@ def make_renderer(color):
                 name = block.get("name", "?")
                 summ = summarize_tool(name, block.get("input"))
                 tail = f"  {summ}" if summ else ""
-                print(f"{dim}  ⏺ {name}{tail}  ({elapsed:.1f}s){rs}")
+                emit(f"{dim}  ⏺ {name}{tail}  ({elapsed:.1f}s){rs}")
             elif btype == "text":
                 txt = block.get("text", "").strip()
                 if not txt:
                     continue
                 body = render_markdown(txt) if color else txt
                 if not state["labeled"]:
-                    print(f"\n{ac}agent ›{rs} {body}")
+                    emit(f"\n{ac}agent ›{rs} {body}")
                     state["labeled"] = True
                 else:
-                    print(body)
+                    emit(body)
                 state["prose"] = True
 
     return on_event, state
@@ -182,10 +250,14 @@ def main():
             continue
         try:
             # Stream the turn: a dim line per tool call, prose in green as it
-            # lands — so you watch the work happen instead of staring at a
-            # spinner and getting a wall of text at the end.
-            on_event, state = make_renderer(color)
-            reply = run_turn(msg, trust, on_event=on_event)
+            # lands — and a braille spinner ticking in the gaps while the model
+            # thinks, so you watch the work happen and can always tell live from
+            # hung. The renderer prints through the spinner's emit() so each line
+            # wipes the spinner before it lands.
+            with Spinner() as spin:
+                emit = spin.emit if spin.enabled else print
+                on_event, state = make_renderer(color, emit=emit)
+                reply = run_turn(msg, trust, on_event=on_event)
             # Fallback: if the stream carried no assistant text (rare), still
             # show the final reply so a turn is never silent.
             if not state["prose"] and reply:
