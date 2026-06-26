@@ -195,4 +195,14 @@ if __name__ == "__main__":
     msg = " ".join(argv) or sys.stdin.read().strip()
     if not msg:
         sys.exit('usage: agent.py [public|private] "your message"')
-    print(run_turn(msg, trust))
+    # Guard the one-shot like the adapters do: a ctrl-c mid-turn (which unwinds
+    # through subprocess._communicate's blocking select) or a run_turn error must
+    # exit cleanly, never dump a raw traceback.
+    try:
+        print(run_turn(msg, trust))
+    except KeyboardInterrupt:
+        print("\n  ⏹ turn aborted", file=sys.stderr)
+        sys.exit(130)
+    except Exception as e:
+        print(f"[error] {e}", file=sys.stderr)
+        sys.exit(1)
