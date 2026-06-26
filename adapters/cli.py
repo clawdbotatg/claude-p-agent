@@ -153,7 +153,12 @@ def main():
     color = sys.stdout.isatty()
     uc, ac, rs = (USER_COLOR, AGENT_COLOR, RESET) if color else ("", "", "")
 
-    print(f"claude-p-agent · {trust} channel · ctrl-d to quit")
+    print(f"claude-p-agent · {trust} channel · ctrl-c stops a turn, ctrl-c again quits (or ctrl-d)")
+    # One ctrl-c "stops the current thought"; a second one — with no real input
+    # in between — quits. `armed` is that latch: set whenever a ctrl-c lands,
+    # cleared the moment you type a real message, so the double-tap only quits
+    # when it's a genuine repeat, not a stop-then-keep-going.
+    armed = False
     while True:
         try:
             # Open the color before the prompt so the line you type is colored
@@ -164,10 +169,15 @@ def main():
             sys.stdout.write(rs)
             print()
             return
-        except KeyboardInterrupt:  # ctrl-c at the prompt → clear the line, stay
+        except KeyboardInterrupt:  # ctrl-c at the prompt
             sys.stdout.write(rs)
-            print("^C")
+            if armed:  # second tap → quit
+                print("^C")
+                return
+            print(f"^C  {DIM}(ctrl-c again to quit){rs}")
+            armed = True
             continue
+        armed = False  # a real message disarms the quit latch
         if not msg:
             continue
         try:
@@ -181,8 +191,9 @@ def main():
             if not state["prose"] and reply:
                 body = render_markdown(reply) if color else reply
                 print(f"\n{ac}agent ›{rs} {body}")
-        except KeyboardInterrupt:  # ctrl-c mid-turn → abort it, back to the prompt
-            print(f"\n{DIM}  ⏹ turn aborted{rs}")
+        except KeyboardInterrupt:  # ctrl-c mid-turn → stop the thought; arm quit
+            print(f"\n{DIM}  ⏹ stopped  (ctrl-c again to quit){rs}")
+            armed = True
         except Exception as e:
             print(f"\n[error] {e}", file=sys.stderr)
 
