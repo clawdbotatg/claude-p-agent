@@ -10,12 +10,20 @@ your own keyboard). Pass --public to feel the untrusted-channel behavior.
   python3 adapters/cli.py --public    # simulate an untrusted channel
   echo "hi" | python3 adapters/cli.py # one-shot via stdin
 """
+import codecs
 import itertools
 import os
 import re
+import shutil
 import sys
 import threading
 import time
+
+try:  # POSIX-only; the raw-mode editor falls back to input() without these.
+    import termios
+    import tty
+except ImportError:  # pragma: no cover — non-POSIX
+    termios = tty = None
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent import run_turn  # noqa: E402
@@ -196,6 +204,191 @@ def render_markdown(text):
     return "\n".join(out)
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _vis_len(s):
+    """Visible width of a string — its length with SGR color codes stripped,
+    so the prompt's color escapes don't throw off cursor math."""
+    return len(_ANSI_RE.sub("", s))
+
+
+def _enter_kind(seq):
+    """Classify a CSI sequence that encodes the Enter key, so we can tell a
+    bare Enter (submit) from a modified one (Shift/Alt/Ctrl+Enter → newline).
+
+    Two terminal encodings report this once their protocol is enabled:
+      • kitty keyboard protocol  → CSI `13[;mods]u`   (e.g. `13;2u`)
+      • xterm modifyOtherKeys    → CSI `27;mods;13~`
+    The keycode for Enter is 13; the modifier field is 1 + a bitmask, so any
+    value > 1 means a modifier was held. Returns "newline", "submit", or None.
+    """
+    if seq.endswith("u"):                       # kitty: <code>[;<mods>]u
+        parts = seq[:-1].split(";")
+        if not parts[0].isdigit() or int(parts[0]) != 13:
+            return None
+        mods = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
+        return "newline" if mods > 1 else "submit"
+    if seq.endswith("~") and seq.startswith("27;"):  # modifyOtherKeys: 27;<mods>;<code>~
+        parts = seq[:-1].split(";")
+        if len(parts) >= 3 and parts[2].isdigit() and int(parts[2]) == 13:
+            mods = int(parts[1]) if parts[1].isdigit() else 1
+            return "newline" if mods > 1 else "submit"
+    return None
+
+
+def read_multiline(prompt, cont, reset):
+    """Read one submission from the terminal — Enter submits, Shift/Alt+Enter
+    inserts a newline, and a paste lands as a single unit.
+
+    `input()` returns at the first newline, so a pasted multiline message left
+    its tail in stdin to be read back as separate prompts on later calls — the
+    bug this replaces. Here we drive the tty in raw mode and own newline handling
+    ourselves: a literal Enter is the only thing that submits. Bracketed paste
+    (DECSET 2004) wraps a paste in markers so its embedded newlines are inserted,
+    never submitted. Shift+Enter (CSI-u `13;2u`) and Alt/ESC+Enter add a newline.
+
+    The cursor always sits at the end of the buffer — there's no mid-line editing
+    beyond backspace — which keeps the redraw honest: we count the rows the block
+    occupies (accounting for wrap), jump back to the top, clear, and reprint.
+
+    Raises KeyboardInterrupt on ctrl-c and EOFError on ctrl-d at an empty buffer,
+    matching what the caller already expects from input(). Falls back to input()
+    when there's no real tty or termios isn't available."""
+    if termios is None or not sys.stdin.isatty():
+        return input(prompt)
+
+    fd = sys.stdin.fileno()
+    out = sys.stdout
+    buf = []           # the message so far, as a list of chars (incl. '\n')
+    rows = [None]      # rows the last render occupied (None until first draw)
+    dec = codecs.getincrementaldecoder("utf-8")()
+
+    def render():
+        # Lay the buffer out as display segments: prompt + first line, then the
+        # continuation marker before each subsequent line.
+        lines = "".join(buf).split("\n")
+        segs = [prompt + lines[0]] + [cont + ln for ln in lines[1:]]
+        w = max(1, shutil.get_terminal_size((80, 24)).columns)
+
+        chunk = []
+        if rows[0] is not None:  # return to the top of the previous block, clear it
+            chunk.append("\r")
+            if rows[0] > 1:
+                chunk.append(f"\x1b[{rows[0] - 1}A")
+            chunk.append("\x1b[J")
+        chunk.append("\r\n".join(segs))  # raw mode: \n alone won't return the carriage
+        out.write("".join(chunk))
+        out.flush()
+
+        # Count rows the block now spans, so the next render knows how far up to
+        # jump. Each segment wraps every `w` columns (pending-wrap aware).
+        total = 0
+        for i, ln in enumerate(lines):
+            vis = _vis_len(prompt if i == 0 else cont) + len(ln)
+            total += 1 + (max(vis, 1) - 1) // w
+        rows[0] = total
+
+    def read_csi():
+        # Consume a CSI sequence after ESC[ up to and including its final byte.
+        seq = b""
+        while True:
+            b = os.read(fd, 1)
+            if not b:
+                break
+            seq += b
+            if 0x40 <= b[0] <= 0x7E:
+                break
+        return seq.decode("latin1")
+
+    def read_paste():
+        # Slurp a bracketed paste until the ESC[201~ terminator; normalize CRLF.
+        data = b""
+        while True:
+            b = os.read(fd, 1)
+            if not b:
+                break
+            data += b
+            if data.endswith(b"\x1b[201~"):
+                data = data[:-6]
+                break
+        return data.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "\n")
+
+    out.write("\n")  # the blank separator line, drawn while still in cooked mode
+    out.flush()
+    old = termios.tcgetattr(fd)
+    # Turn on the input modes we depend on. A terminal that doesn't understand
+    # any of these ignores the sequence (it's an unknown CSI), so this is safe
+    # everywhere:
+    #   ?2004h  bracketed paste — a paste's embedded newlines never submit
+    #   >1u     kitty keyboard protocol — reports Shift+Enter as CSI `13;2u`
+    #   >4;1m   xterm modifyOtherKeys — the same, as CSI `27;2;13~`
+    # Without these last two, terminals send a bare \r for Shift+Enter (= submit),
+    # so requesting them is what makes "shift+enter for a newline" actually work.
+    out.write("\x1b[?2004h\x1b[>1u\x1b[>4;1m")
+    out.flush()
+    try:
+        tty.setraw(fd)
+        render()
+        while True:
+            b = os.read(fd, 1)
+            if not b:  # stdin closed
+                raise EOFError
+            c = b[0]
+            if c == 0x03:  # ctrl-c
+                out.write("\r\n")
+                raise KeyboardInterrupt
+            if c == 0x04:  # ctrl-d → EOF only on an empty buffer
+                if not buf:
+                    out.write("\r\n")
+                    raise EOFError
+                continue
+            if c in (0x7F, 0x08):  # backspace / delete
+                if buf:
+                    buf.pop()
+                    render()
+                continue
+            if c in (0x0D, 0x0A):  # Enter → submit everything as one prompt
+                out.write(reset + "\r\n")
+                out.flush()
+                return "".join(buf)
+            if c == 0x1B:  # ESC — start of an escape sequence
+                nb = os.read(fd, 1)
+                if not nb:
+                    continue
+                if nb[0] == 0x5B:  # '['
+                    seq = read_csi()
+                    if seq == "200~":
+                        buf.extend(read_paste())
+                        render()
+                    else:
+                        kind = _enter_kind(seq)  # Shift/Alt/Ctrl+Enter via CSI
+                        if kind == "newline":
+                            buf.append("\n")
+                            render()
+                        elif kind == "submit":  # a terminal that reports bare Enter as CSI-u
+                            out.write(reset + "\r\n")
+                            out.flush()
+                            return "".join(buf)
+                        # arrows and other CSI sequences: ignored
+                elif nb[0] in (0x0D, 0x0A):  # Alt/ESC+Enter → newline
+                    buf.append("\n")
+                    render()
+                continue
+            ch = dec.decode(b)  # printable (may be multi-byte UTF-8)
+            if ch:
+                add = [k for k in ch if k.isprintable()]
+                if add:
+                    buf.extend(add)
+                    render()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        # Undo every mode we enabled above, in reverse, so the next program
+        # (or the turn's own output) inherits a clean terminal.
+        out.write("\x1b[>4;0m\x1b[<u\x1b[?2004l")
+        out.flush()
+
+
 def main():
     trust = "public" if "--public" in sys.argv[1:] else "private"
 
@@ -222,6 +415,8 @@ def main():
     uc, ac, rs = (USER_COLOR, AGENT_COLOR, RESET) if color else ("", "", "")
 
     print(f"claude-p-agent · {trust} channel · ctrl-c stops a turn, ctrl-c again quits (or ctrl-d)")
+    if sys.stdin.isatty():
+        print(f"{DIM}  shift+enter (or alt+enter) for a new line · enter to send{rs}")
     # One ctrl-c "stops the current thought"; a second one — with no real input
     # in between — quits. `armed` is that latch: set whenever a ctrl-c lands,
     # cleared the moment you type a real message, so the double-tap only quits
@@ -229,10 +424,11 @@ def main():
     armed = False
     while True:
         try:
-            # Open the color before the prompt so the line you type is colored
-            # too; reset right after so nothing else inherits it.
-            msg = input(f"\n{uc}you › ").strip()
-            sys.stdout.write(rs)
+            # Open the color before the prompt so the text you type is colored
+            # too; the editor writes the reset when you submit. The editor owns
+            # newline handling — Enter submits, shift+enter inserts a line — so a
+            # pasted multiline message arrives as ONE prompt, not one per line.
+            msg = read_multiline(f"{uc}you › ", f"{DIM}    … {uc}", rs).strip()
         except EOFError:  # ctrl-d → quit (as the banner says)
             sys.stdout.write(rs)
             print()
