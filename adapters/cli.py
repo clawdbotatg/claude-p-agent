@@ -131,11 +131,22 @@ def render_markdown(text):
 def main():
     trust = "public" if "--public" in sys.argv[1:] else "private"
 
-    # Non-interactive (piped) input → one-shot, then exit.
+    # Non-interactive (piped) input → one-shot, then exit. Guard it like the
+    # interactive loop below: a piped turn must never dump a raw traceback on
+    # ctrl-c, a closed downstream pipe, or a run_turn error.
     if not sys.stdin.isatty():
         msg = sys.stdin.read().strip()
         if msg:
-            print(run_turn(msg, trust))
+            try:
+                print(run_turn(msg, trust))
+            except KeyboardInterrupt:  # ctrl-c mid-turn → abort cleanly, no traceback
+                print(f"{DIM}  ⏹ turn aborted{RESET}", file=sys.stderr)
+                sys.exit(130)
+            except BrokenPipeError:  # downstream closed the pipe → leave quietly
+                os._exit(0)  # skip the shutdown flush that would re-raise on the dead pipe
+            except Exception as e:
+                print(f"[error] {e}", file=sys.stderr)
+                sys.exit(1)
         return
 
     # Only colorize on a real tty; piped/redirected output stays clean.
