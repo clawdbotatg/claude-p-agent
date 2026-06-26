@@ -22,6 +22,13 @@ cp .env.example .env             # optional; defaults work out of the box
 ./tui.sh                         # talk to the default agent in your terminal
 ```
 
+But the TUI isn't the best way to talk to your agent — it's just the first one.
+The best way is the one you tell your agent to **build for you**. That's the whole
+point of `claude-p-agent`: the agent can extend itself. The Telegram adapter
+([`adapters/telegram.py`](adapters/telegram.py), launched with `./tg.sh`) is the
+first one built that way — put a token in `.env` and your agent is in your pocket,
+with a DM from you trusted as `private` and everyone else as `public`.
+
 (`./tui.sh` is just a thin launcher for `python3 adapters/cli.py` — same thing,
 less typing. Use `./tui.sh --public` to feel the untrusted-channel behavior.)
 

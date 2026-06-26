@@ -24,6 +24,13 @@ once, each mapping its source to the right trust level.
 | Adapter | Source | Trust |
 |---|---|---|
 | `cli.py` | your terminal | `private` (or `--public` to simulate untrusted) |
+| `telegram.py` | a Telegram bot | DM from the owner → `private`; anyone else / any group → `public` |
+
+`telegram.py` is the worked example of the next paragraph: ~200 lines, no
+dependencies (it speaks the Bot API over `urllib`), and it narrates the turn live
+by editing one message in place as tool calls happen — the phone-shaped version of
+the terminal's activity log. Set `TELEGRAM_BOT_TOKEN` + `TELEGRAM_OWNER_ID` in
+`.env`, then `./tg.sh`.
 
 ## Writing your own
 
