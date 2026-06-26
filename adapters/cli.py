@@ -10,11 +10,55 @@ your own keyboard). Pass --public to feel the untrusted-channel behavior.
   python3 adapters/cli.py --public    # simulate an untrusted channel
   echo "hi" | python3 adapters/cli.py # one-shot via stdin
 """
+import itertools
 import os
 import sys
+import threading
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent import run_turn  # noqa: E402
+
+
+class Spinner:
+    """A braille spinner on stderr while a turn runs. A turn is one blocking
+    `subprocess.run`, so without this the terminal sits silent — you can't tell
+    thinking from hung. Only animates on a real tty; a no-op otherwise so
+    piped/one-shot output stays clean. Use as a context manager."""
+
+    FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def __init__(self, label="thinking", stream=sys.stderr):
+        self.label = label
+        self.stream = stream
+        self.enabled = stream.isatty()
+        self._stop = threading.Event()
+        self._thread = None
+
+    def _spin(self):
+        start = time.monotonic()
+        for frame in itertools.cycle(self.FRAMES):
+            if self._stop.is_set():
+                break
+            elapsed = time.monotonic() - start
+            self.stream.write(f"\r\033[90m{frame} {self.label}… {elapsed:4.1f}s\033[0m")
+            self.stream.flush()
+            time.sleep(0.08)
+
+    def __enter__(self):
+        if self.enabled:
+            self._thread = threading.Thread(target=self._spin, daemon=True)
+            self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        if self._thread:
+            self._thread.join()
+        if self.enabled:
+            self.stream.write("\r\033[2K")  # erase the spinner line
+            self.stream.flush()
+        return False
 
 
 def main():
@@ -37,7 +81,9 @@ def main():
         if not msg:
             continue
         try:
-            print(f"\nagent › {run_turn(msg, trust)}")
+            with Spinner():
+                reply = run_turn(msg, trust)
+            print(f"\nagent › {reply}")
         except Exception as e:
             print(f"\n[error] {e}", file=sys.stderr)
 
