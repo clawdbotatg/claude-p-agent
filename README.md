@@ -19,8 +19,11 @@ Claude subscription (OAuth, not an API key).
 git clone https://github.com/clawdbotatg/claude-p-agent && cd claude-p-agent
 cp CLAUDE.md.example CLAUDE.md   # your agent's persona — gitignored, yours to edit
 cp .env.example .env             # optional; defaults work out of the box
-python3 adapters/cli.py          # talk to the default agent in your terminal
+./tui.sh                         # talk to the default agent in your terminal
 ```
+
+(`./tui.sh` is just a thin launcher for `python3 adapters/cli.py` — same thing,
+less typing. Use `./tui.sh --public` to feel the untrusted-channel behavior.)
 
 Now make it yours: open **`CLAUDE.md`** and write who your agent is and which tools
 it has. Claude Code auto-loads that file every turn, so it *is* the agent. It's
@@ -32,7 +35,7 @@ uncommitted `CLAUDE.md`).
 Then meet the self-improving example:
 
 ```bash
-AGENT_DIR=examples/builder python3 adapters/cli.py
+AGENT_DIR=examples/builder ./tui.sh
 > add a tool that tells a dad joke, then use it
 ```
 
