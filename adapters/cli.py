@@ -57,7 +57,6 @@ class Spinner:
         self._thread = None
         self._start = 0.0
         self._drawn = False  # is the spinner currently occupying the line?
-        self._prose_active = False  # streamed reply on current line — don't overwrite
 
     def _clear(self):
         if self._drawn:
@@ -70,9 +69,7 @@ class Spinner:
                 break
             elapsed = time.monotonic() - self._start
             with self._lock:
-                if self._stop.is_set() or self._prose_active:
-                    pass  # prose owns the line; spinner stays quiet
-                else:
+                if not self._stop.is_set():
                     self.stream.write(f"\r{DIM}{frame} {self.label}… {elapsed:4.1f}s{RESET}")
                     self.stream.flush()
                     self._drawn = True
@@ -84,14 +81,6 @@ class Spinner:
         with self._lock:
             self._clear()
             self.stream.write(text + "\n")
-            self.stream.flush()
-
-    def write_partial(self, text):
-        """Write inline prose (no trailing newline) for stream-json text deltas."""
-        with self._lock:
-            self._prose_active = True
-            self._clear()
-            self.stream.write(text)
             self.stream.flush()
 
     def __enter__(self):
@@ -107,9 +96,7 @@ class Spinner:
             self._thread.join()
         if self.enabled:
             with self._lock:
-                # Only erase a spinner line — never wipe streamed prose.
-                if self._drawn and not self._prose_active:
-                    self._clear()
+                self._clear()
                 self.stream.flush()
         return False
 
@@ -141,28 +128,22 @@ def summarize_tool(name, inp):
     return ""
 
 
-def make_renderer(color, emit=print, write_partial=None):
-    """Build an on_event callback that prints the turn as it happens: a dim line
-    per tool call, the agent's prose streaming in green as text deltas arrive.
-    Lines go out through `emit` (the Spinner's, on a tty) so each one wipes the live
-    spinner before it lands. `write_partial` streams prose without a trailing newline.
-    Returns (callback, state) where state['prose'] says whether any reply text printed."""
+def make_renderer(color, emit=print):
+    """Build an on_event callback: dim lines per tool call; agent prose rendered
+    once when the full reply is known (markdown → ANSI). Returns (callback, state)."""
     dim, ac, rs = (DIM, AGENT_COLOR, RESET) if color else ("", "", "")
     start = time.monotonic()
-    state = {"prose": False, "labeled": False, "text": ""}
-    if write_partial is None:
-        write_partial = lambda s: sys.stdout.write(s) or sys.stdout.flush()
+    state = {"prose": False, "text": "", "displayed": False}
 
-    def _stream_text(chunk):
-        if not chunk:
+    def _show_prose(text):
+        text = text.strip()
+        if not text or state["displayed"]:
             return
-        if not state["labeled"]:
-            write_partial(f"\n{ac}agent ›{rs} {chunk}")
-            state["labeled"] = True
-        else:
-            write_partial(chunk)
+        body = render_markdown(text) if color else text
+        emit(f"\n{ac}agent ›{rs} {body}")
+        state["displayed"] = True
         state["prose"] = True
-        state["text"] += chunk
+        state["text"] = text
 
     def on_event(ev):
         etype = ev.get("type")
@@ -171,7 +152,8 @@ def make_renderer(color, emit=print, write_partial=None):
             if inner.get("type") == "content_block_delta":
                 delta = inner.get("delta", {})
                 if delta.get("type") == "text_delta" and delta.get("text"):
-                    _stream_text(delta["text"])
+                    state["text"] += delta["text"]
+                    state["prose"] = True
             return
         if etype != "assistant":
             return
@@ -185,16 +167,8 @@ def make_renderer(color, emit=print, write_partial=None):
                 emit(f"{dim}  ⏺ {name}{tail}  ({elapsed:.1f}s){rs}")
             elif btype == "text":
                 txt = block.get("text", "")
-                if not txt.strip():
-                    continue
-                if len(txt) > len(state["text"]):
-                    _stream_text(txt[len(state["text"]):])
-                elif not state["prose"]:
-                    body = render_markdown(txt.strip()) if color else txt.strip()
-                    emit(f"\n{ac}agent ›{rs} {body}")
-                    state["labeled"] = True
-                    state["prose"] = True
-                    state["text"] = txt
+                if txt.strip():
+                    _show_prose(txt)
 
     return on_event, state
 
@@ -558,15 +532,10 @@ def main():
             # wipes the spinner before it lands.
             with Spinner() as spin:
                 emit = spin.emit if spin.enabled else print
-                partial = spin.write_partial if spin.enabled else None
-                on_event, state = make_renderer(color, emit=emit, write_partial=partial)
+                on_event, state = make_renderer(color, emit=emit)
                 reply = run_turn(msg, on_event=on_event)
-            if state["prose"]:
-                print()  # newline after streamed prose
-            # Fallback: if the stream carried no assistant text (rare), still
-            # show the final reply so a turn is never silent.
-            if not state["prose"] and reply:
-                body = render_markdown(reply) if color else reply
+            if not state["displayed"] and (reply or state["text"]).strip():
+                body = render_markdown(reply.strip()) if color else reply.strip()
                 print(f"\n{ac}agent ›{rs} {body}")
         except KeyboardInterrupt:  # ctrl-c mid-turn → stop the thought; arm quit
             print(f"\n{DIM}  ⏹ stopped  (ctrl-c again to quit){rs}")
