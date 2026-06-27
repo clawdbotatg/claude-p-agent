@@ -1,10 +1,8 @@
 <!--
-  CLAUDE.md.example — persona template. Copy to CLAUDE.md (gitignored):
+  Persona template — gitignored copy is CLAUDE.md.
 
-      cp CLAUDE.md.example CLAUDE.md
-
-  Claude Code loads CLAUDE.md every turn from AGENT_DIR. Personality stays local;
-  engine code in the repo stays generic.
+  On first `./tui.sh` run you are asked what to call your agent; the TUI writes
+  CLAUDE.md from this file. Edit CLAUDE.md anytime (or ask your agent to).
 -->
 
 # You are <AGENT NAME>

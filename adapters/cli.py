@@ -23,7 +23,12 @@ except ImportError:  # pragma: no cover — non-POSIX
     termios = tty = None
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from agent import run_turn  # noqa: E402
+from agent import AGENT_DIR, agent_home, run_turn  # noqa: E402
+
+REPO_ROOT = agent_home()
+EXAMPLE_PATH = os.path.join(REPO_ROOT, "CLAUDE.md.example")
+CLAUDE_PATH = os.path.join(AGENT_DIR, "CLAUDE.md")
+NAME_PLACEHOLDER = "<AGENT NAME>"
 
 USER_COLOR = "\033[36m"   # cyan — what you type
 AGENT_COLOR = "\033[32m"  # green — what the agent says
@@ -425,11 +430,70 @@ def read_multiline(prompt, cont, reset):
         out.flush()
 
 
+def _claude_md_needs_setup():
+    if not os.path.isfile(CLAUDE_PATH):
+        return True
+    try:
+        with open(CLAUDE_PATH, encoding="utf-8") as f:
+            return NAME_PLACEHOLDER in f.read()
+    except OSError:
+        return True
+
+
+def personalize_claude_md(text, name):
+    """Fill the template with a chosen agent name and minimal starter persona."""
+    name = name.strip()
+    text = text.replace(NAME_PLACEHOLDER, name)
+    text = text.replace(
+        "TODO: one short paragraph — who you are and what you're for.",
+        f"You help your owner on their computer — practical, capable, and direct.",
+        1,
+    )
+    text = text.replace(
+        "TODO: tone, length, formatting.",
+        "Friendly and concise. Plain text.",
+        1,
+    )
+    return text
+
+
+def bootstrap_claude_md(*, interactive):
+    """First run: create CLAUDE.md from the example and ask what to call the agent."""
+    if not _claude_md_needs_setup():
+        return None
+    if not os.path.isfile(EXAMPLE_PATH):
+        raise RuntimeError(f"missing template: {EXAMPLE_PATH}")
+    with open(EXAMPLE_PATH, encoding="utf-8") as f:
+        template = f.read()
+    if interactive and sys.stdin.isatty():
+        print("First run — set up your agent.")
+        while True:
+            try:
+                name = input("What should I be called? › ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                sys.exit(0)
+            if name:
+                break
+            print("  (need a name — try again)")
+    else:
+        name = "agent"
+    body = personalize_claude_md(template, name)
+    with open(CLAUDE_PATH, "w", encoding="utf-8") as f:
+        f.write(body)
+    return name
+
+
 def main():
     # Non-interactive (piped) input → one-shot, then exit. Guard it like the
     # interactive loop below: a piped turn must never dump a raw traceback on
     # ctrl-c, a closed downstream pipe, or a run_turn error.
     if not sys.stdin.isatty():
+        try:
+            bootstrap_claude_md(interactive=False)
+        except Exception as e:
+            print(f"[error] {e}", file=sys.stderr)
+            sys.exit(1)
         msg = sys.stdin.read().strip()
         if msg:
             try:
@@ -447,6 +511,14 @@ def main():
     # Only colorize on a real tty; piped/redirected output stays clean.
     color = sys.stdout.isatty()
     uc, ac, rs = (USER_COLOR, AGENT_COLOR, RESET) if color else ("", "", "")
+
+    try:
+        name = bootstrap_claude_md(interactive=True)
+    except Exception as e:
+        print(f"[error] {e}", file=sys.stderr)
+        sys.exit(1)
+    if name:
+        print(f"{DIM}  wrote {CLAUDE_PATH} — hi, I'm {name}.{rs}")
 
     print("claude-p-agent · ctrl-c stops a turn, ctrl-c again quits (or ctrl-d)")
     if sys.stdin.isatty():

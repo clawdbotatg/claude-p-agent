@@ -21,10 +21,10 @@ You need the [`claude` CLI](https://docs.claude.com/en/docs/claude-code) on a Cl
 
 ```bash
 git clone https://github.com/clawdbotatg/claude-p-agent && cd claude-p-agent
-cp CLAUDE.md.example CLAUDE.md   # required — Claude Code loads this as persona
-cp .env.example .env             # optional
-./tui.sh
+./tui.sh    # first run asks what to call your agent and writes CLAUDE.md
 ```
+
+Optional: `cp .env.example .env` for `BRAIN_DIRS` and other knobs.
 
 First thing to try: *"Read skills/extend/SKILL.md and add a tool I ask for."*
 
@@ -63,7 +63,7 @@ export CLAUDE_P_AGENT_HOME=/path/to/claude-p-agent
 
 ## Make it yours
 
-1. **Persona** → edit `CLAUDE.md`
+1. **Persona** → `./tui.sh` creates `CLAUDE.md` on first run; edit anytime
 2. **Tools** → drop scripts in `tools/` or `tools/local/`
 3. **New interface** → build an adapter (see `skills/extend/SKILL.md`) or point your agent at that skill
 4. **Secrets** → `.env`
