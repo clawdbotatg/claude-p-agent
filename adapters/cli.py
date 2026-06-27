@@ -490,12 +490,13 @@ def main():
 
     print("claude-p-agent · ctrl-c stops a turn, ctrl-c again quits (or ctrl-d)")
     if sys.stdin.isatty():
-        print(f"{DIM}  shift+enter (or alt+enter) for a new line · enter to send{rs}")
+        print(f"{DIM}  shift+enter (or alt+enter) for a new line · enter to send · /new fresh session{rs}")
     # One ctrl-c "stops the current thought"; a second one — with no real input
     # in between — quits. `armed` is that latch: set whenever a ctrl-c lands,
     # cleared the moment you type a real message, so the double-tap only quits
     # when it's a genuine repeat, not a stop-then-keep-going.
     armed = False
+    session_id = None  # --resume across REPL turns
     while True:
         try:
             # Open the color before the prompt so the text you type is colored
@@ -518,6 +519,10 @@ def main():
         armed = False  # a real message disarms the quit latch
         if not msg:
             continue
+        if msg.lower() in ("/new", "/clear"):
+            session_id = None
+            print(f"{DIM}  fresh session{rs}")
+            continue
         try:
             # Stream the turn: a dim line per tool call, prose in green as it
             # lands — and a braille spinner ticking in the gaps while the model
@@ -527,7 +532,12 @@ def main():
             with Spinner() as spin:
                 emit = spin.emit if spin.enabled else print
                 on_event, state = make_renderer(color, emit=emit)
-                reply = run_turn(msg, on_event=on_event)
+                result = run_turn(
+                    msg, on_event=on_event, session_id=session_id, return_meta=True,
+                )
+            if result.get("session_id"):
+                session_id = result["session_id"]
+            reply = result.get("text") or ""
             final = (reply or state.get("text") or "").strip()
             if final:
                 body = render_markdown(final) if color else final
