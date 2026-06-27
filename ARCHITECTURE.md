@@ -1,10 +1,10 @@
 # Architecture
 
-Three layers. One engine.
+Two pieces in this repo. Everything else is extension.
 
 ## claude-p-agent (this repo)
 
-**The engine.** `agent.py` spawns `claude -p` in `AGENT_DIR` with env scrubbed so the
+**Engine:** `agent.py` spawns `claude -p` in `AGENT_DIR` with env scrubbed so the
 child runs on your subscription.
 
 ```python
@@ -12,19 +12,19 @@ from agent import run_turn
 
 run_turn(
     "hello",
-    append_system_prompt=...,  # optional — from the adapter, not the engine
+    append_system_prompt=...,  # optional — from an adapter you write
     session_id=...,            # optional — --resume
-    extra_args=...,            # optional — CLI flags from the adapter
+    extra_args=...,            # optional
     on_event=...,              # optional — stream-json
 )
 ```
 
-**Persona** = `CLAUDE.md` in the agent directory (Claude Code loads it automatically).
+**TUI:** `adapters/cli.py` → `run_turn()` with streaming renderer. Launched via `./tui.sh`.
 
-**The engine does not know** about public/private, voice, backchannel, or Telegram.
-Adapters own channel policy and pass `append_system_prompt` + `extra_args`.
+**Persona:** `CLAUDE.md` in the agent directory (Claude Code loads it automatically).
 
-**One-off agents** = clone this repo, edit `CLAUDE.md` + `tools/`, wire an adapter.
+The engine does **not** know about public/private, Telegram, voice, or trust tiers.
+You add those in adapters you own. See `skills/extend/SKILL.md`.
 
 Import from other repos:
 
@@ -32,34 +32,13 @@ Import from other repos:
 export CLAUDE_P_AGENT_HOME=/path/to/claude-p-agent
 ```
 
-## Adapters (thin)
+## Extension (not shipped here)
 
-Map an input source → `run_turn(...)`.
-
-| Adapter | Repo | Owns |
-|---|---|---|
-| `adapters/cli.py` | claude-p-agent | `adapters/prompts/` for `--public` sim |
-| `adapters/telegram.py` | claude-p-agent | owner vs stranger prompts + `CLAUDE_ARGS_PUBLIC` |
-| `cc-bridge.py` | clawd-video-chat | `prompts/voice*.md`, `[SAY]` TTS, WS gateway |
-| `controller/agent.py` | clawd-harness | `controller/prompts/` + MCP fleet tools |
-
-## clawd-harness (workhorse)
-
-**Not an agent.** Interactive `claude` sessions in PTYs over WebSocket (`server.py`).
-
-The brain's `tools/code` helper drives harness sessions to do real coding. The
-harness never imports `agent.py`.
-
-## clawd-video-chat (face)
-
-Wake word, avatar, TTS, backchannel. Calls `run_turn` from claude-p-agent.
-Channel prompts live in **`clawd-video-chat/prompts/`**, not here.
-
-```
-mic / backchannel → cc-bridge → run_turn() → claude -p @ AGENT_DIR (clawd clone)
-                     ↓
-                  [SAY] → TTS → room
-```
+| You want… | Where to look |
+|---|---|
+| Add tools, Telegram, web, cron | `skills/extend/SKILL.md` — or ask your agent to read it and build |
+| Voice / avatar / TTS | [clawd-video-chat](https://github.com/clawdbotatg/clawd-video-chat) |
+| Multi-session coding UI | [clawd-harness](https://github.com/clawdbotatg/clawd-harness) |
 
 ## Env vars
 
@@ -67,6 +46,8 @@ mic / backchannel → cc-bridge → run_turn() → claude -p @ AGENT_DIR (clawd 
 |---|---|
 | `AGENT_DIR` | cwd for `claude -p` (persona + tools home) |
 | `CLAUDE_P_AGENT_HOME` | path to import `agent.py` from another repo |
-| `CC_BRIDGE_CWD` | brain directory for video (usually same as agent clone) |
-| `CLAUDE_ARGS` | extra CLI flags on every turn (engine default) |
-| `CLAUDE_ARGS_PUBLIC` | used by **telegram/cli adapters**, not the engine |
+| `BRAIN_DIRS` | extra readable dirs (`:`-separated → `--add-dir`) |
+| `CLAUDE_ARGS` | extra CLI flags on every turn |
+| `CLAUDE_BIN` | path to claude CLI (default: `claude`) |
+
+Adapter-specific vars (Telegram tokens, etc.) belong in **your** adapter's docs, not here.

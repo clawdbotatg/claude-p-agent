@@ -1,23 +1,22 @@
 # Adapters
 
-An adapter maps a message source → `run_turn(...)`. The engine has no trust tiers;
-you pass `append_system_prompt` and `extra_args` from adapter-owned prompt files.
+An adapter maps a message source → `run_turn(...)`.
+
+**Shipped:** `cli.py` only (terminal TUI). Launched via `./tui.sh`.
+
+**Yours to add:** Telegram, web UI, Slack, cron, voice bridge, etc. The engine stays
+dumb; you pass `append_system_prompt` and `extra_args` from adapter-owned prompt files.
+
+Read **`skills/extend/SKILL.md`** for patterns and a minimal code sketch.
 
 ```python
-import sys, os
-sys.path.insert(0, os.environ.get("CLAUDE_P_AGENT_HOME", "/path/to/claude-p-agent"))
-from agent import read_prompt, run_turn
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from agent import run_turn
 
-reply = run_turn(
-    text,
-    append_system_prompt=read_prompt("adapters/prompts/public.md"),
-    extra_args=["--permission-mode", "plan"],
-)
+reply = run_turn(user_text, on_event=...)  # trusted keyboard — no extra prompt
 ```
 
-| Adapter | Channel policy |
-|---|---|
-| `cli.py` | owner keyboard (none) or `--public` → `adapters/prompts/public.md` |
-| `telegram.py` | owner DM → `private.md`; else → `public.md` + `CLAUDE_ARGS_PUBLIC` |
+Reference implementations in other repos:
 
-See `ARCHITECTURE.md`. Video-chat adapter lives in `clawd-video-chat/cc-bridge.py`.
+- Voice: [clawd-video-chat/cc-bridge.py](https://github.com/clawdbotatg/clawd-video-chat)

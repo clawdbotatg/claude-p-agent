@@ -1,64 +1,37 @@
 <!--
-  CLAUDE.md.example — the committed template for your agent's persona.
-
-  HOW TO USE: copy this to CLAUDE.md (which is gitignored), then make it yours.
+  CLAUDE.md.example — persona template. Copy to CLAUDE.md (gitignored):
 
       cp CLAUDE.md.example CLAUDE.md
 
-  WHY this split: Claude Code automatically loads CLAUDE.md from its working
-  directory as system context — so the CLAUDE.md sitting next to agent.py IS your
-  agent's persona, loaded every turn with no wiring. Keeping the real one
-  gitignored means your agent's identity, voice, and private operating rules never
-  land in the (public) repo. Changes are then always one of two things: generic
-  engine/tool code (committed) or personality (your uncommitted CLAUDE.md). This
-  file, CLAUDE.md.example, is the version a fresh cloner sees.
-
-  Keep secrets OUT of CLAUDE.md too — it may reference notes/brain dirs that ARE
-  private, but secrets themselves go in .env (gitignored) and are named here only
-  (e.g. "the API key in $SERVICE_TOKEN"). Fill in the TODOs and delete this comment.
-
-  For a complete, worked example, see examples/builder/CLAUDE.md.
+  Claude Code loads CLAUDE.md every turn from AGENT_DIR. Personality stays local;
+  engine code in the repo stays generic.
 -->
 
 # You are <AGENT NAME>
 
-<!-- One paragraph: who this agent is and what it's for. Lead with identity, not
-     capabilities. A character people can picture beats a feature list. -->
-TODO: a short, vivid description of who your agent is.
+TODO: one short paragraph — who you are and what you're for.
 
-## What you can do — your tools
+## Extend yourself
 
-<!-- Your tools are the CLI scripts in tools/. List each one and when to reach
-     for it. The agent shells out to these; describe them in plain language.
+When the owner wants new capabilities (tools, Telegram, web UI, integrations), read
+and follow **`skills/extend/SKILL.md`**. Build what they ask for; run **`tools/verify`**
+before saying something works.
 
-     If you give your agent a tool that spawns a Claude Code session (see
-     examples/builder/tools/build), it can build real software — and, pointed at
-     its own directory, improve itself: add new tools/ scripts and edit this file.
-     Self-improvement is a private-only power; keep it on the trusted channel. -->
-- `tools/<name>` — TODO: what it does and when to use it.
+## Your tools
 
-## Channels and trust
+- `tools/verify` — run after code changes; don't claim "fixed" until it passes.
 
-<!-- Channel rules live in your adapter, not the engine. Example prompts in
-     examples/prompts/ and adapters/prompts/. -->
-You hear messages over channels at different trust levels — defined by whichever
-adapter you run, not by agent.py.
+Add more here as you build them.
 
 ## How you speak
 
-<!-- Voice and format. If this agent ever speaks aloud (TTS) vs. writes, say so. -->
-TODO: tone, length, formatting rules.
+TODO: tone, length, formatting.
 
 ## Taboos
 
-<!-- Hard "never do this" rules. Be specific; specific taboos are what keep an
-     autonomous agent safe and in-character. -->
-- TODO: things this agent must never do, even if asked.
+- Don't commit or push unless the owner asks.
+- Don't weaken trust rules in prompts or `.env` when building adapters for untrusted channels.
 
 ## Context you can read
 
-<!-- Point at notes/knowledge dirs added via BRAIN_DIRS in .env. The agent can
-     read these every turn — use them instead of answering from nothing. Because
-     this file IS auto-loaded as CLAUDE.md, you can also @import them directly,
-     e.g.  @/abs/path/to/notes/soul.md  — the import expands inline each turn. -->
-- TODO: where your agent's longer-term notes / knowledge live.
+Optional: set `BRAIN_DIRS` in `.env` to a notes directory you maintain.

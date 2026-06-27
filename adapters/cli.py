@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
-"""cli.py — the hello-world adapter: talk to your agent in a terminal.
+"""cli.py — terminal adapter: talk to your agent in a TUI.
 
-An adapter maps WHERE a message came from → extra prompt + CLI flags, then calls
-run_turn(). This one reads from your terminal (owner keyboard). Pass --public to
-simulate an untrusted channel using adapters/prompts/public.md.
+Maps keyboard input → run_turn(). Add other front-ends as sibling scripts in
+adapters/ (Telegram, web, etc.) — see skills/extend/SKILL.md.
 
-  python3 adapters/cli.py             # owner channel (no extra prompt)
-  python3 adapters/cli.py --public    # untrusted channel simulation
+  python3 adapters/cli.py             # interactive REPL
   echo "hi" | python3 adapters/cli.py # one-shot via stdin
 """
 import codecs
 import itertools
 import os
 import re
-import shlex
 import shutil
 import sys
 import threading
@@ -26,21 +23,7 @@ except ImportError:  # pragma: no cover — non-POSIX
     termios = tty = None
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from agent import read_prompt, run_turn  # noqa: E402
-
-ADAPTER_PROMPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
-
-
-def turn_kwargs(public=False):
-    """Map terminal mode → run_turn kwargs (prompt + optional CLI lock)."""
-    if not public:
-        return {}
-    kw = {"append_system_prompt": read_prompt(os.path.join(ADAPTER_PROMPTS, "public.md"))}
-    extra = os.environ.get("CLAUDE_ARGS_PUBLIC", "").strip()
-    if extra:
-        kw["extra_args"] = shlex.split(extra)
-    return kw
-
+from agent import run_turn  # noqa: E402
 
 USER_COLOR = "\033[36m"   # cyan — what you type
 AGENT_COLOR = "\033[32m"  # green — what the agent says
@@ -437,10 +420,6 @@ def read_multiline(prompt, cont, reset):
 
 
 def main():
-    public = "--public" in sys.argv[1:]
-    kwargs = turn_kwargs(public)
-    channel = "public" if public else "owner"
-
     # Non-interactive (piped) input → one-shot, then exit. Guard it like the
     # interactive loop below: a piped turn must never dump a raw traceback on
     # ctrl-c, a closed downstream pipe, or a run_turn error.
@@ -448,7 +427,7 @@ def main():
         msg = sys.stdin.read().strip()
         if msg:
             try:
-                print(run_turn(msg, **kwargs))
+                print(run_turn(msg))
             except KeyboardInterrupt:  # ctrl-c mid-turn → abort cleanly, no traceback
                 print(f"{DIM}  ⏹ turn aborted{RESET}", file=sys.stderr)
                 sys.exit(130)
@@ -463,7 +442,7 @@ def main():
     color = sys.stdout.isatty()
     uc, ac, rs = (USER_COLOR, AGENT_COLOR, RESET) if color else ("", "", "")
 
-    print(f"claude-p-agent · {channel} channel · ctrl-c stops a turn, ctrl-c again quits (or ctrl-d)")
+    print("claude-p-agent · ctrl-c stops a turn, ctrl-c again quits (or ctrl-d)")
     if sys.stdin.isatty():
         print(f"{DIM}  shift+enter (or alt+enter) for a new line · enter to send{rs}")
     # One ctrl-c "stops the current thought"; a second one — with no real input
@@ -503,7 +482,7 @@ def main():
                 emit = spin.emit if spin.enabled else print
                 partial = spin.write_partial if spin.enabled else None
                 on_event, state = make_renderer(color, emit=emit, write_partial=partial)
-                reply = run_turn(msg, on_event=on_event, **kwargs)
+                reply = run_turn(msg, on_event=on_event)
             if state["prose"]:
                 print()  # newline after streamed prose
             # Fallback: if the stream carried no assistant text (rare), still
