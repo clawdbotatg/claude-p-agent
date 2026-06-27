@@ -129,21 +129,11 @@ def summarize_tool(name, inp):
 
 
 def make_renderer(color, emit=print):
-    """Build an on_event callback: dim lines per tool call; agent prose rendered
-    once when the full reply is known (markdown → ANSI). Returns (callback, state)."""
+    """Build an on_event callback: dim lines per tool call; prose printed once
+    at turn end (see main()) so tool-heavy turns still show the final answer."""
     dim, ac, rs = (DIM, AGENT_COLOR, RESET) if color else ("", "", "")
     start = time.monotonic()
-    state = {"prose": False, "text": "", "displayed": False}
-
-    def _show_prose(text):
-        text = text.strip()
-        if not text or state["displayed"]:
-            return
-        body = render_markdown(text) if color else text
-        emit(f"\n{ac}agent ›{rs} {body}")
-        state["displayed"] = True
-        state["prose"] = True
-        state["text"] = text
+    state = {"prose": False, "text": ""}
 
     def on_event(ev):
         etype = ev.get("type")
@@ -168,7 +158,8 @@ def make_renderer(color, emit=print):
             elif btype == "text":
                 txt = block.get("text", "")
                 if txt.strip():
-                    _show_prose(txt)
+                    state["text"] = txt
+                    state["prose"] = True
 
     return on_event, state
 
@@ -537,9 +528,12 @@ def main():
                 emit = spin.emit if spin.enabled else print
                 on_event, state = make_renderer(color, emit=emit)
                 reply = run_turn(msg, on_event=on_event)
-            if not state["displayed"] and (reply or state["text"]).strip():
-                body = render_markdown(reply.strip()) if color else reply.strip()
+            final = (reply or state.get("text") or "").strip()
+            if final:
+                body = render_markdown(final) if color else final
                 print(f"\n{ac}agent ›{rs} {body}")
+            elif not state["prose"]:
+                print(f"\n{DIM}  (no reply text){rs}")
         except KeyboardInterrupt:  # ctrl-c mid-turn → stop the thought; arm quit
             print(f"\n{DIM}  ⏹ stopped  (ctrl-c again to quit){rs}")
             armed = True
