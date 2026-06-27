@@ -532,8 +532,8 @@ def main():
             if final:
                 body = render_markdown(final) if color else final
                 print(f"\n{ac}agent ›{rs} {body}")
-            elif not state["prose"]:
-                print(f"\n{DIM}  (no reply text){rs}")
+            else:
+                print(f"\n{DIM}  (no reply — tools may have run; try again){rs}")
         except KeyboardInterrupt:  # ctrl-c mid-turn → stop the thought; arm quit
             print(f"\n{DIM}  ⏹ stopped  (ctrl-c again to quit){rs}")
             armed = True
