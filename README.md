@@ -21,7 +21,7 @@ You need the [`claude` CLI](https://docs.claude.com/en/docs/claude-code) on a Cl
 
 ```bash
 git clone https://github.com/clawdbotatg/claude-p-agent && cd claude-p-agent
-cp CLAUDE.md.example CLAUDE.md   # edit — this is your agent
+cp CLAUDE.md.example CLAUDE.md   # required — Claude Code loads this as persona
 cp .env.example .env             # optional
 ./tui.sh
 ```

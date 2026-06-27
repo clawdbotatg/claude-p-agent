@@ -52,6 +52,7 @@ class Spinner:
         self._thread = None
         self._start = 0.0
         self._drawn = False  # is the spinner currently occupying the line?
+        self._prose_active = False  # streamed reply on current line — don't overwrite
 
     def _clear(self):
         if self._drawn:
@@ -64,7 +65,9 @@ class Spinner:
                 break
             elapsed = time.monotonic() - self._start
             with self._lock:
-                if not self._stop.is_set():
+                if self._stop.is_set() or self._prose_active:
+                    pass  # prose owns the line; spinner stays quiet
+                else:
                     self.stream.write(f"\r{DIM}{frame} {self.label}… {elapsed:4.1f}s{RESET}")
                     self.stream.flush()
                     self._drawn = True
@@ -81,6 +84,7 @@ class Spinner:
     def write_partial(self, text):
         """Write inline prose (no trailing newline) for stream-json text deltas."""
         with self._lock:
+            self._prose_active = True
             self._clear()
             self.stream.write(text)
             self.stream.flush()
@@ -98,7 +102,9 @@ class Spinner:
             self._thread.join()
         if self.enabled:
             with self._lock:
-                self._clear()
+                # Only erase a spinner line — never wipe streamed prose.
+                if self._drawn and not self._prose_active:
+                    self._clear()
                 self.stream.flush()
         return False
 
