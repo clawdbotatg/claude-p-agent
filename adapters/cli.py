@@ -423,11 +423,14 @@ def personalize_claude_md(text, name):
         f"You help your owner on their computer — practical, capable, and direct.",
         1,
     )
-    text = text.replace(
-        "TODO: tone, length, formatting.",
-        "Friendly and concise. Plain text.",
-        1,
-    )
+    if "TODO: tone, length, formatting." in text:
+        text = text.replace(
+            "TODO: tone, length, formatting.",
+            "Match the channel: markdown in the terminal TUI; short plain text when an "
+            "adapter says you're on voice or another spoken surface. Follow any "
+            "append_system_prompt the adapter adds.",
+            1,
+        )
     return text
 
 

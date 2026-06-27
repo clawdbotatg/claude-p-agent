@@ -10,6 +10,8 @@ No framework. No orchestration loop. **Claude Code is the loop.** This repo ship
 
 That's it. Telegram, web UI, voice, cron — **you add them** (or ask your agent to build them). See **[skills/extend/SKILL.md](skills/extend/SKILL.md)**.
 
+**Typical path:** clone this repo as your **brain** (persona + tools), then wire **[clawd-video-chat](https://github.com/clawdbotatg/clawd-video-chat)** (or another adapter) with `CLAUDE_P_AGENT_HOME` + `CC_BRIDGE_CWD` pointing here. `./tui.sh` is the dev/bootstrap console — not how most people talk to the agent day-to-day.
+
 Optional related projects (not bundled):
 
 - [clawd-video-chat](https://github.com/clawdbotatg/clawd-video-chat) — voice / avatar / TTS

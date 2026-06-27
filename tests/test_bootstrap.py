@@ -28,7 +28,8 @@ class PersonalizeTests(unittest.TestCase):
         self.assertIn("# You are Larry", out)
         self.assertNotIn("<AGENT NAME>", out)
         self.assertNotIn("TODO: one short paragraph", out)
-        self.assertIn("Friendly and concise", out)
+        self.assertIn("Match the", out)
+        self.assertIn("append_system_prompt", out)
 
 
 if __name__ == "__main__":

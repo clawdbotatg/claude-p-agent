@@ -12,6 +12,16 @@ This repo ships **only** a terminal TUI (`./tui.sh`) and a tiny engine (`agent.p
 Everything else is yours to add. The engine does not know about Telegram, voice,
 public channels, or trust tiers — **adapters** do.
 
+## Typical deployment
+
+1. **Brain** — this repo: `CLAUDE.md`, `tools/`, skills. One clone per agent persona.
+2. **Face** — an adapter repo (most often **[clawd-video-chat](https://github.com/clawdbotatg/clawd-video-chat)** for voice/video) that calls `run_turn()` and supplies channel prompts.
+3. **TUI** — optional; first-run bootstrap + debugging. Not the main user interface.
+
+Output shape is **adapter-owned**: voice prompts demand brief spoken text; the TUI
+renders markdown; Telegram might chunk long replies. Base `CLAUDE.md` should stay
+channel-neutral and defer to whatever `append_system_prompt` the adapter passes.
+
 ## Mental model
 
 ```

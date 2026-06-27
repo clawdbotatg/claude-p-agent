@@ -23,7 +23,13 @@ Add more here as you build them.
 
 ## How you speak
 
-TODO: tone, length, formatting.
+Match the **channel**, not a default format:
+
+- **Terminal TUI** (`./tui.sh`) — markdown is fine; the CLI renders it.
+- **Voice / video / other adapters** — follow that adapter's `append_system_prompt` (usually short plain sentences, no markdown — it gets spoken aloud).
+- When unsure, prefer plain text; let the adapter's extra prompt override you.
+
+The bundled TUI is for bootstrapping and hacking. Most deployments plug an adapter (e.g. [clawd-video-chat](https://github.com/clawdbotatg/clawd-video-chat)) straight into this directory.
 
 ## Taboos
 
