@@ -1,6 +1,9 @@
 # secrets — never commit
 .env
 
+# private session notes (BRAIN_DIRS)
+notes/
+
 # your real persona — gitignored so personality changes never hit the public repo.
 # Only the ROOT one is private; CLAUDE.md.example is the committed template, and
 # examples/*/CLAUDE.md are committed (generic). The leading slash anchors to root.
@@ -16,6 +19,10 @@ tools/local/*
 *.pyc
 __pycache__/
 .DS_Store
+
+# local sibling-repo checkouts (see ARCHITECTURE.md — not part of claude-p-agent)
+/clawd-harness/
+/clawd-video-chat/
 
 # example tool runtime state (tokens, registries, logs the agent generates)
 *.token.json

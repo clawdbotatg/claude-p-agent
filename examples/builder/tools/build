@@ -16,7 +16,7 @@ Why a separate session instead of just editing files in the turn?
 Self-improvement falls out for free: point it at the agent's OWN directory and the
 agent rewrites itself — `build run . "add a tool that checks the weather"`. The
 trust model already makes this safe: building changes code, so it's private-only
-(see prompts/public.md). A public message physically can't reach this tool.
+(see examples/prompts/public.md). A public message physically can't reach this tool.
 
   build run <dir> "<task>"           run a task to completion in <dir>, print summary
   build worktree <repo> "<task>"     run in a throwaway git worktree of <repo>;

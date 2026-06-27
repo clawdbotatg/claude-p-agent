@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""verify — run before claiming a code change is fixed or done.
+
+Compiles every Python file in the repo and runs unittest discovery if tests/
+exists. Exit 0 = safe to say "verified"; non-zero = not done.
+
+  tools/verify
+  tools/verify adapters/cli.py    # only check listed paths (+ always run tests)
+"""
+import compileall
+import os
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def die(msg, code=1):
+    print(f"verify: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def py_files_under(root):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in ("__pycache__", ".git", ".worktrees", "clawd-harness", "clawd-video-chat")
+        ]
+        for name in filenames:
+            if name.endswith(".py"):
+                yield os.path.join(dirpath, name)
+
+
+def main():
+    targets = [os.path.abspath(os.path.expanduser(p)) for p in sys.argv[1:]]
+    if targets:
+        paths = [p for p in targets if p.endswith(".py") and os.path.isfile(p)]
+        missing = [p for p in targets if p not in paths]
+        if missing:
+            die("not found or not a .py file: " + ", ".join(missing))
+    else:
+        paths = list(py_files_under(HERE))
+
+    failed = []
+    for path in paths:
+        ok = compileall.compile_file(path, quiet=1)
+        if not ok:
+            failed.append(path)
+    if failed:
+        die("compile failed:\n  " + "\n  ".join(failed))
+
+    print(f"verify: compiled {len(paths)} file(s)")
+
+    tests_dir = os.path.join(HERE, "tests")
+    if os.path.isdir(tests_dir):
+        r = subprocess.run(
+            [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q"],
+            cwd=HERE,
+        )
+        if r.returncode != 0:
+            die("tests failed", r.returncode)
+        print("verify: tests passed")
+    else:
+        print("verify: no tests/ dir (compile-only)")
+
+    print("verify: ok")
+
+
+if __name__ == "__main__":
+    main()

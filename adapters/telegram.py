@@ -1,44 +1,22 @@
 #!/usr/bin/env python3
 """telegram.py — talk to your agent from your phone.
 
-An adapter's whole job is to decide (a) WHERE a message came from and (b) how
-much to trust it, then call run_turn(text, trust). This one bridges a Telegram
-bot, so the agent is no longer chained to the terminal you launched it from —
-it's in your pocket, reachable from anywhere.
-
-The trust map is the one a chat app makes obvious: a direct message from the
-owner (TELEGRAM_OWNER_ID) is `private` — full trust, it's you. Everything else —
-other people's DMs, any group chat — is `public`. Anyone can message a bot, and
-a message is never proof of identity, no matter what it claims.
-
-No dependencies, like the rest of the repo: this speaks the Telegram Bot API
-directly over urllib (long-poll getUpdates, sendMessage / editMessageText).
-There's no python-telegram-bot to install.
-
-Setup (about a minute):
-  1. Make a bot: DM @BotFather on Telegram → /newbot → copy the token.
-  2. Find your numeric user id: DM @userinfobot → it replies with your id.
-  3. Put both in .env (gitignored):
-       TELEGRAM_BOT_TOKEN=123456:ABC-your-token
-       TELEGRAM_OWNER_ID=987654321
-  4. Run:  python3 adapters/telegram.py   (or ./tg.sh)
-  5. DM your bot.
-
-Security: this adapter maps trust; it does not enforce it. Back the public
-channel with CLAUDE_ARGS_PUBLIC in .env so a stranger's message physically
-cannot call a dangerous tool — the prompt is the policy, the flags are the lock.
-See prompts/public.md and .env.example.
+Maps Telegram messages → run_turn() with adapter-owned prompts in adapters/prompts/.
+Owner DM = private.md + full tools; everyone else = public.md + CLAUDE_ARGS_PUBLIC lock.
 """
 import os
 import sys
 import time
 import json
+import shlex
 import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from agent import run_turn  # noqa: E402
-from cli import summarize_tool  # reuse the same human tool labels as the terminal  # noqa: E402
+from agent import read_prompt, run_turn  # noqa: E402
+from cli import summarize_tool  # noqa: E402
+
+ADAPTER_PROMPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 OWNER_ID = os.environ.get("TELEGRAM_OWNER_ID", "").strip()
@@ -107,18 +85,24 @@ def chunks(text):
     return out
 
 
+def turn_kwargs(trusted):
+    """Owner DM vs everyone else → prompt file + optional CLI lock."""
+    name = "private" if trusted else "public"
+    kw = {"append_system_prompt": read_prompt(os.path.join(ADAPTER_PROMPTS, f"{name}.md"))}
+    if not trusted:
+        extra = os.environ.get("CLAUDE_ARGS_PUBLIC", "").strip()
+        if extra:
+            kw["extra_args"] = shlex.split(extra)
+    return kw
+
+
 def trust_for(message):
-    """Map a Telegram message to a trust level. `private` ONLY for a 1:1 DM from
-    the configured owner id — both conditions matter: the owner's id proves it's
-    them, and chat.type == private rules out a group where the owner is just one
-    of many speakers and others could be quoting/spoofing. Everything else, when
-    OWNER_ID is unset, or when anything is ambiguous → `public`. When unsure, the
-    safe answer is always public."""
+    """True for a 1:1 DM from TELEGRAM_OWNER_ID."""
     frm = message.get("from") or {}
     chat = message.get("chat") or {}
     if OWNER_ID and str(frm.get("id")) == OWNER_ID and chat.get("type") == "private":
-        return "private"
-    return "public"
+        return True
+    return False
 
 
 def handle(message):
@@ -133,7 +117,8 @@ def handle(message):
     if not text:
         return  # ignore stickers, photos, joins, etc. — this adapter is text-only
     chat_id = message["chat"]["id"]
-    trust = trust_for(message)
+    trusted = trust_for(message)
+    kwargs = turn_kwargs(trusted)
 
     if text in ("/start", "/help"):
         post_text(chat_id, WELCOME)
@@ -165,7 +150,7 @@ def handle(message):
                     text=body[:TG_LIMIT])
 
     try:
-        reply = run_turn(text, trust, on_event=on_event)
+        reply = run_turn(text, on_event=on_event, **kwargs)
     except Exception as e:
         reply = f"[error] {e}"
 

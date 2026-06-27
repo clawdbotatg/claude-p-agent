@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """cli.py — the hello-world adapter: talk to your agent in a terminal.
 
-An adapter's whole job is to decide (a) WHERE a message came from and (b) how
-much to trust it, then call run_turn(text, trust). That's all an adapter is.
-This one reads lines from your terminal — so it defaults to `private` (you're at
-your own keyboard). Pass --public to feel the untrusted-channel behavior.
+An adapter maps WHERE a message came from → extra prompt + CLI flags, then calls
+run_turn(). This one reads from your terminal (owner keyboard). Pass --public to
+simulate an untrusted channel using adapters/prompts/public.md.
 
-  python3 adapters/cli.py             # private REPL
-  python3 adapters/cli.py --public    # simulate an untrusted channel
+  python3 adapters/cli.py             # owner channel (no extra prompt)
+  python3 adapters/cli.py --public    # untrusted channel simulation
   echo "hi" | python3 adapters/cli.py # one-shot via stdin
 """
 import codecs
 import itertools
 import os
 import re
+import shlex
 import shutil
 import sys
 import threading
@@ -26,7 +26,20 @@ except ImportError:  # pragma: no cover — non-POSIX
     termios = tty = None
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from agent import run_turn  # noqa: E402
+from agent import read_prompt, run_turn  # noqa: E402
+
+ADAPTER_PROMPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
+
+
+def turn_kwargs(public=False):
+    """Map terminal mode → run_turn kwargs (prompt + optional CLI lock)."""
+    if not public:
+        return {}
+    kw = {"append_system_prompt": read_prompt(os.path.join(ADAPTER_PROMPTS, "public.md"))}
+    extra = os.environ.get("CLAUDE_ARGS_PUBLIC", "").strip()
+    if extra:
+        kw["extra_args"] = shlex.split(extra)
+    return kw
 
 
 USER_COLOR = "\033[36m"   # cyan — what you type
@@ -82,6 +95,13 @@ class Spinner:
             self.stream.write(text + "\n")
             self.stream.flush()
 
+    def write_partial(self, text):
+        """Write inline prose (no trailing newline) for stream-json text deltas."""
+        with self._lock:
+            self._clear()
+            self.stream.write(text)
+            self.stream.flush()
+
     def __enter__(self):
         if self.enabled:
             self._start = time.monotonic()
@@ -127,19 +147,39 @@ def summarize_tool(name, inp):
     return ""
 
 
-def make_renderer(color, emit=print):
+def make_renderer(color, emit=print, write_partial=None):
     """Build an on_event callback that prints the turn as it happens: a dim line
-    per tool call, the agent's prose in green as each chunk arrives. Lines go out
-    through `emit` (the Spinner's, on a tty) so each one wipes the live spinner
-    before it lands. Returns (callback, state) where state['prose'] says whether
-    any reply text printed — so the caller can fall back to printing the final
-    string if the stream was silent (e.g. a turn that ended without a text block)."""
+    per tool call, the agent's prose streaming in green as text deltas arrive.
+    Lines go out through `emit` (the Spinner's, on a tty) so each one wipes the live
+    spinner before it lands. `write_partial` streams prose without a trailing newline.
+    Returns (callback, state) where state['prose'] says whether any reply text printed."""
     dim, ac, rs = (DIM, AGENT_COLOR, RESET) if color else ("", "", "")
     start = time.monotonic()
-    state = {"prose": False, "labeled": False}
+    state = {"prose": False, "labeled": False, "text": ""}
+    if write_partial is None:
+        write_partial = lambda s: sys.stdout.write(s) or sys.stdout.flush()
+
+    def _stream_text(chunk):
+        if not chunk:
+            return
+        if not state["labeled"]:
+            write_partial(f"\n{ac}agent ›{rs} {chunk}")
+            state["labeled"] = True
+        else:
+            write_partial(chunk)
+        state["prose"] = True
+        state["text"] += chunk
 
     def on_event(ev):
-        if ev.get("type") != "assistant":
+        etype = ev.get("type")
+        if etype == "stream_event":
+            inner = ev.get("event", {})
+            if inner.get("type") == "content_block_delta":
+                delta = inner.get("delta", {})
+                if delta.get("type") == "text_delta" and delta.get("text"):
+                    _stream_text(delta["text"])
+            return
+        if etype != "assistant":
             return
         elapsed = time.monotonic() - start
         for block in ev.get("message", {}).get("content", []):
@@ -150,16 +190,17 @@ def make_renderer(color, emit=print):
                 tail = f"  {summ}" if summ else ""
                 emit(f"{dim}  ⏺ {name}{tail}  ({elapsed:.1f}s){rs}")
             elif btype == "text":
-                txt = block.get("text", "").strip()
-                if not txt:
+                txt = block.get("text", "")
+                if not txt.strip():
                     continue
-                body = render_markdown(txt) if color else txt
-                if not state["labeled"]:
+                if len(txt) > len(state["text"]):
+                    _stream_text(txt[len(state["text"]):])
+                elif not state["prose"]:
+                    body = render_markdown(txt.strip()) if color else txt.strip()
                     emit(f"\n{ac}agent ›{rs} {body}")
                     state["labeled"] = True
-                else:
-                    emit(body)
-                state["prose"] = True
+                    state["prose"] = True
+                    state["text"] = txt
 
     return on_event, state
 
@@ -246,7 +287,8 @@ def read_multiline(prompt, cont, reset):
     bug this replaces. Here we drive the tty in raw mode and own newline handling
     ourselves: a literal Enter is the only thing that submits. Bracketed paste
     (DECSET 2004) wraps a paste in markers so its embedded newlines are inserted,
-    never submitted. Shift+Enter (CSI-u `13;2u`) and Alt/ESC+Enter add a newline.
+    never submitted. Shift+Enter (often LF / 0x0A on macOS and Cursor), modifyOtherKeys
+    CSI `27;2;13~`, kitty CSI-u `13;2u` if present, and Alt/ESC+Enter add a newline.
 
     The cursor always sits at the end of the buffer — there's no mid-line editing
     beyond backspace — which keeps the redraw honest: we count the rows the block
@@ -321,11 +363,12 @@ def read_multiline(prompt, cont, reset):
     # any of these ignores the sequence (it's an unknown CSI), so this is safe
     # everywhere:
     #   ?2004h  bracketed paste — a paste's embedded newlines never submit
-    #   >1u     kitty keyboard protocol — reports Shift+Enter as CSI `13;2u`
-    #   >4;1m   xterm modifyOtherKeys — the same, as CSI `27;2;13~`
-    # Without these last two, terminals send a bare \r for Shift+Enter (= submit),
-    # so requesting them is what makes "shift+enter for a newline" actually work.
-    out.write("\x1b[?2004h\x1b[>1u\x1b[>4;1m")
+    #   >4;1m   xterm modifyOtherKeys — Shift+Enter as CSI `27;2;13~`
+    # Do NOT enable kitty keyboard protocol (>1u): on terminals that honor it,
+    # *every* key becomes a CSI-u sequence, and we only decode a few — typing
+    # would silently break. Shift+Enter is covered by LF (0x0A) on macOS/Cursor
+    # and by modifyOtherKeys / Alt+Enter elsewhere.
+    out.write("\x1b[?2004h\x1b[>4;1m")
     out.flush()
     try:
         tty.setraw(fd)
@@ -348,7 +391,11 @@ def read_multiline(prompt, cont, reset):
                     buf.pop()
                     render()
                 continue
-            if c in (0x0D, 0x0A):  # Enter → submit everything as one prompt
+            if c == 0x0A:  # LF — Shift+Enter on many terminals (macOS, iTerm, Cursor)
+                buf.append("\n")
+                render()
+                continue
+            if c == 0x0D:  # CR — bare Enter → submit everything as one prompt
                 out.write(reset + "\r\n")
                 out.flush()
                 return "".join(buf)
@@ -385,12 +432,14 @@ def read_multiline(prompt, cont, reset):
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
         # Undo every mode we enabled above, in reverse, so the next program
         # (or the turn's own output) inherits a clean terminal.
-        out.write("\x1b[>4;0m\x1b[<u\x1b[?2004l")
+        out.write("\x1b[>4;0m\x1b[?2004l")
         out.flush()
 
 
 def main():
-    trust = "public" if "--public" in sys.argv[1:] else "private"
+    public = "--public" in sys.argv[1:]
+    kwargs = turn_kwargs(public)
+    channel = "public" if public else "owner"
 
     # Non-interactive (piped) input → one-shot, then exit. Guard it like the
     # interactive loop below: a piped turn must never dump a raw traceback on
@@ -399,7 +448,7 @@ def main():
         msg = sys.stdin.read().strip()
         if msg:
             try:
-                print(run_turn(msg, trust))
+                print(run_turn(msg, **kwargs))
             except KeyboardInterrupt:  # ctrl-c mid-turn → abort cleanly, no traceback
                 print(f"{DIM}  ⏹ turn aborted{RESET}", file=sys.stderr)
                 sys.exit(130)
@@ -414,7 +463,7 @@ def main():
     color = sys.stdout.isatty()
     uc, ac, rs = (USER_COLOR, AGENT_COLOR, RESET) if color else ("", "", "")
 
-    print(f"claude-p-agent · {trust} channel · ctrl-c stops a turn, ctrl-c again quits (or ctrl-d)")
+    print(f"claude-p-agent · {channel} channel · ctrl-c stops a turn, ctrl-c again quits (or ctrl-d)")
     if sys.stdin.isatty():
         print(f"{DIM}  shift+enter (or alt+enter) for a new line · enter to send{rs}")
     # One ctrl-c "stops the current thought"; a second one — with no real input
@@ -452,8 +501,11 @@ def main():
             # wipes the spinner before it lands.
             with Spinner() as spin:
                 emit = spin.emit if spin.enabled else print
-                on_event, state = make_renderer(color, emit=emit)
-                reply = run_turn(msg, trust, on_event=on_event)
+                partial = spin.write_partial if spin.enabled else None
+                on_event, state = make_renderer(color, emit=emit, write_partial=partial)
+                reply = run_turn(msg, on_event=on_event, **kwargs)
+            if state["prose"]:
+                print()  # newline after streamed prose
             # Fallback: if the stream carried no assistant text (rare), still
             # show the final reply so a turn is never silent.
             if not state["prose"] and reply:

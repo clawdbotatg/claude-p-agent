@@ -1,27 +1,23 @@
 #!/usr/bin/env python3
 """agent.py — the whole engine.
 
-An agent here is just `claude -p` run in this directory, fed a message tagged
-with a trust level. That's the entire idea. This file is the ~100 lines that
-make it happen; everything else in the repo is config plugged into it.
+An agent is `claude -p` run in a directory (AGENT_DIR), with an optional extra
+system prompt from the adapter. That's the entire idea.
 
 A turn:
-  1. pick a system prompt by trust level  (prompts/public.md | prompts/private.md)
-  2. scrub the environment                (so the child runs on YOUR subscription)
-  3. spawn `claude -p` with this dir as cwd → Claude Code auto-loads CLAUDE.md as persona
+  1. scrub the environment          (child runs on YOUR subscription, not metered API)
+  2. spawn `claude -p` in AGENT_DIR → Claude Code auto-loads CLAUDE.md as persona
+  3. optionally append adapter-supplied channel policy
   4. hand back what it said
 
-Adapters (terminal, web, voice, Telegram, …) are thin: they decide WHERE a
-message came from and how much to trust it, then call run_turn(). They never
-need to know anything about Claude.
+Adapters decide WHERE a message came from and what extra prompt/CLI flags to
+pass. The engine does not know about public/private, voice, or backchannel.
 
-Config via environment, or a `.env` file in the repo root (auto-loaded; real
-environment variables take precedence). All optional — sensible defaults:
-  AGENT_DIR        the agent's working dir / persona home   (default: this file's dir)
-  BRAIN_DIRS       extra readable dirs, ':'-separated → --add-dir   (default: none)
-  CLAUDE_BIN       path to the claude CLI                    (default: "claude")
-  CLAUDE_ARGS      extra args for every turn, shell-split    (default: none)
-  CLAUDE_ARGS_PUBLIC / CLAUDE_ARGS_PRIVATE   extra args per trust level
+Config via `.env` in the repo root (auto-loaded; real env wins):
+  AGENT_DIR      persona home / cwd for claude -p     (default: this file's dir)
+  BRAIN_DIRS     extra readable dirs, ':'-separated   (→ --add-dir)
+  CLAUDE_BIN     path to claude CLI                   (default: "claude")
+  CLAUDE_ARGS     extra CLI args every turn, shell-split
 """
 import json
 import os
@@ -33,11 +29,12 @@ import threading
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
+def agent_home():
+    """Root of the claude-p-agent install (for imports from other repos)."""
+    return os.environ.get("CLAUDE_P_AGENT_HOME", HERE)
+
+
 def _load_env_file(path):
-    """Minimal .env loader: `KEY=VALUE` lines → os.environ. No dependency, and a
-    value already set in the real environment WINS (setdefault), so .env is a
-    default, not an override. Without this, the .env the README tells you to
-    create — including the CLAUDE_ARGS_PUBLIC trust-lock — would do nothing."""
     try:
         with open(path, encoding="utf-8") as f:
             for line in f:
@@ -53,21 +50,15 @@ def _load_env_file(path):
         pass
 
 
-_load_env_file(os.path.join(HERE, ".env"))
+_load_env_file(os.path.join(agent_home(), ".env"))
 
-AGENT_DIR = os.path.abspath(os.environ.get("AGENT_DIR", HERE))
-PROMPTS_DIR = os.path.join(HERE, "prompts")
-
-VALID_TRUST = ("public", "private")
+AGENT_DIR = os.path.abspath(os.environ.get("AGENT_DIR", agent_home()))
 
 # ── the one non-obvious thing ────────────────────────────────────────────────
-# If you shell `claude` from inside an environment that already has these set
-# (e.g. you launched THIS process from Claude Code, or from another agent), the
-# child detects it's "embedded" and switches to metered API billing with no
-# transcript written. Scrubbing them makes the child a clean, top-level
-# interactive-style run on your Claude subscription. Do not remove this.
+# If you shell `claude` from inside an environment that already has these set,
+# the child detects "embedded" mode → metered API billing, no transcript.
 SCRUB_PREFIXES = ("CLAUDECODE", "CLAUDE_CODE_")
-SCRUB_EXACT = {"ANTHROPIC_API_KEY"}
+SCRUB_EXACT = {"ANTHROPIC_API_KEY", "AI_AGENT"}
 
 
 def scrubbed_env():
@@ -78,73 +69,145 @@ def scrubbed_env():
     return env
 
 
-def _read_prompt(trust):
-    path = os.path.join(PROMPTS_DIR, f"{trust}.md")
-    try:
-        with open(path, encoding="utf-8") as f:
-            return f.read().strip()
-    except FileNotFoundError:
-        return ""  # no per-channel prompt is fine; CLAUDE.md still carries persona
+def read_prompt(path):
+    """Read a prompt file. Adapters own the paths."""
+    with open(path, encoding="utf-8") as f:
+        return f.read().strip()
 
 
-def _extra_args(trust):
-    args = shlex.split(os.environ.get("CLAUDE_ARGS", ""))
-    args += shlex.split(os.environ.get(f"CLAUDE_ARGS_{trust.upper()}", ""))
-    return args
+def _base_extra_args():
+    return shlex.split(os.environ.get("CLAUDE_ARGS", ""))
 
 
-def run_turn(text, trust="private", on_event=None):
-    """Run one agent turn. Returns the agent's reply as a string.
-
-    `trust` selects the system prompt and any per-channel CLI flags. Keep the
-    real security boundary in the CLI flags (--allowedTools / --permission-mode),
-    not only in the prompt — see prompts/public.md.
-
-    `on_event` makes the turn OBSERVABLE. Without it, `claude -p` prints only the
-    final text — every tool call in between is invisible, so an adapter can show
-    nothing but a spinner while the turn blocks. Pass a callback and we instead
-    run with `--output-format stream-json` and hand you each event as it happens
-    (system/init, assistant messages with text + tool_use blocks, tool_results,
-    and the final result). That's the channel an adapter needs to narrate the
-    work live — a line per action — instead of going dark then dumping. The
-    return value is the same either way, so callers that don't care are unchanged.
-    """
-    if trust not in VALID_TRUST:
-        raise ValueError(f"trust must be one of {VALID_TRUST}, got {trust!r}")
-
-    cmd = [os.environ.get("CLAUDE_BIN", "claude"), "-p"]
-    sys_prompt = _read_prompt(trust)
-    if sys_prompt:
-        cmd += ["--append-system-prompt", sys_prompt]
+def _build_flags(
+    *,
+    append_system_prompt=None,
+    session_id=None,
+    add_dirs=None,
+    extra_args=None,
+    stream=False,
+):
+    """CLI flags for `claude -p`. Prompt goes immediately after `-p` (see _claude_cmd)."""
+    flags = []
+    if append_system_prompt:
+        flags += ["--append-system-prompt", append_system_prompt]
+    for d in add_dirs or []:
+        flags += ["--add-dir", os.path.expanduser(d)]
     for d in filter(None, os.environ.get("BRAIN_DIRS", "").split(":")):
-        cmd += ["--add-dir", os.path.expanduser(d)]
-    cmd += _extra_args(trust)
+        flags += ["--add-dir", os.path.expanduser(d)]
+    flags += _base_extra_args()
+    if extra_args:
+        flags += list(extra_args)
+    if session_id:
+        flags += ["--resume", session_id]
+    if stream:
+        flags += ["--output-format", "stream-json", "--verbose", "--include-partial-messages"]
+    return flags
 
-    if on_event is not None:
-        # stream-json with -p requires --verbose; the flags compose fine with the
-        # trust-lock args above (--allowedTools / --permission-mode etc.).
-        return _run_streaming(
-            cmd + ["--output-format", "stream-json", "--verbose", text], on_event
-        )
 
-    proc = subprocess.run(
-        cmd + [text], cwd=AGENT_DIR, env=scrubbed_env(),
-        capture_output=True, text=True,
+def _claude_cmd(text, flags, input_via="argv"):
+    """Assemble argv. Newer claude requires the prompt right after `-p` when flags
+    like --add-dir follow — a trailing positional prompt is ignored."""
+    bin_ = os.environ.get("CLAUDE_BIN", "claude")
+    if input_via == "argv":
+        return [bin_, "-p", text] + flags
+    return [bin_, "-p"] + flags
+
+
+def run_turn(
+    text,
+    *,
+    append_system_prompt=None,
+    session_id=None,
+    cwd=None,
+    add_dirs=None,
+    extra_args=None,
+    on_event=None,
+    input_via="argv",
+    return_meta=False,
+    proc_holder=None,
+    timeout=None,
+):
+    """Run one agent turn.
+
+    `append_system_prompt` — channel policy from the adapter (engine has none).
+    `on_event` — if set, run stream-json and fire the callback per event.
+    `input_via` — \"argv\" (default) or \"stdin\" (prompt written to stdin).
+    `return_meta` — if True, return {\"text\", \"session_id\"}; else return str.
+    `proc_holder` — if a dict, filled with {\"proc\": Popen} for streaming turns (abort).
+    """
+    workdir = os.path.abspath(cwd or AGENT_DIR)
+    stream = on_event is not None
+    flags = _build_flags(
+        append_system_prompt=append_system_prompt,
+        session_id=session_id,
+        add_dirs=add_dirs,
+        extra_args=extra_args,
+        stream=stream,
     )
+    cmd = _claude_cmd(text, flags, input_via=input_via)
+
+    meta = {"session_id": session_id}
+
+    def _track_session(event):
+        if event.get("type") == "system" and event.get("subtype") == "init":
+            sid = event.get("session_id")
+            if sid:
+                meta["session_id"] = sid
+        elif event.get("type") == "result" and event.get("session_id"):
+            meta["session_id"] = event["session_id"]
+
+    if stream:
+        final = _run_streaming(
+            cmd, text, workdir, on_event, _track_session,
+            input_via=input_via, proc_holder=proc_holder,
+        )
+    else:
+        final = _run_blocking(
+            cmd, text, workdir, input_via=input_via, timeout=timeout,
+        )
+        # Non-streaming json output could add session capture later if needed.
+
+    if return_meta:
+        return {"text": final, "session_id": meta["session_id"]}
+    return final
+
+
+def _run_blocking(cmd, text, cwd, input_via="argv", timeout=None):
+    env = scrubbed_env()
+    try:
+        if input_via == "stdin":
+            proc = subprocess.run(
+                cmd, cwd=cwd, env=env, input=text, capture_output=True, text=True,
+                timeout=timeout,
+            )
+        else:
+            proc = subprocess.run(
+                cmd, cwd=cwd, env=env, capture_output=True, text=True,
+                timeout=timeout, stdin=subprocess.DEVNULL,
+            )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"claude timed out after {timeout}s")
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "").strip()
         raise RuntimeError(f"claude exited {proc.returncode}: {err}")
     return proc.stdout.strip()
 
 
-def _run_streaming(cmd, on_event):
-    """Run `claude -p --output-format stream-json`, fire on_event(dict) per JSON
-    line as it arrives, and return the final reply text. stderr is drained on a
-    side thread so a chatty/erroring child can't deadlock the stdout read."""
+def _run_streaming(cmd, text, cwd, on_event, track_session, input_via="argv",
+                   proc_holder=None):
+    env = scrubbed_env()
     proc = subprocess.Popen(
-        cmd, cwd=AGENT_DIR, env=scrubbed_env(), text=True, bufsize=1,
+        cmd, cwd=cwd, env=env, text=True, bufsize=1,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        stdin=subprocess.PIPE if input_via == "stdin" else subprocess.DEVNULL,
     )
+    if proc_holder is not None:
+        proc_holder["proc"] = proc
+    if input_via == "stdin":
+        proc.stdin.write(text)
+        proc.stdin.close()
+
     stderr_chunks = []
     err_thread = threading.Thread(
         target=lambda: stderr_chunks.extend(proc.stderr), daemon=True
@@ -160,18 +223,16 @@ def _run_streaming(cmd, on_event):
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
-                continue  # non-JSON noise on stdout — skip, never crash the turn
+                continue
             if event.get("type") == "result":
                 final = (event.get("result") or "").strip()
+            track_session(event)
             try:
                 on_event(event)
             except Exception:
-                pass  # a rendering hiccup must never kill the turn
+                pass
         proc.wait()
     except KeyboardInterrupt:
-        # Ctrl+C mid-turn: don't orphan the child `claude` (it'd keep running on
-        # your subscription). Terminate it, give it a beat to exit, then re-raise
-        # so the adapter can return to its prompt instead of crashing.
         proc.terminate()
         try:
             proc.wait(timeout=2)
@@ -187,19 +248,16 @@ def _run_streaming(cmd, on_event):
 
 
 if __name__ == "__main__":
-    # Tiny one-shot for smoke-testing: `python3 agent.py [public|private] "message"`
-    trust = "private"
     argv = sys.argv[1:]
-    if argv and argv[0] in VALID_TRUST:
-        trust, argv = argv[0], argv[1:]
+    append = None
+    if argv and argv[0] == "--append-file":
+        append = read_prompt(argv[1])
+        argv = argv[2:]
     msg = " ".join(argv) or sys.stdin.read().strip()
     if not msg:
-        sys.exit('usage: agent.py [public|private] "your message"')
-    # Guard the one-shot like the adapters do: a ctrl-c mid-turn (which unwinds
-    # through subprocess._communicate's blocking select) or a run_turn error must
-    # exit cleanly, never dump a raw traceback.
+        sys.exit('usage: agent.py [--append-file PATH] "your message"')
     try:
-        print(run_turn(msg, trust))
+        print(run_turn(msg, append_system_prompt=append))
     except KeyboardInterrupt:
         print("\n  ⏹ turn aborted", file=sys.stderr)
         sys.exit(130)
