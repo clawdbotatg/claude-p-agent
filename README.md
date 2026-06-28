@@ -52,12 +52,38 @@ External adapters import the engine:
 export CLAUDE_P_AGENT_HOME=/path/to/claude-p-agent
 ```
 
+## Memory
+
+The engine is **stateless** — a turn is a pure function. **Memory is the adapter's
+job**, on purpose: only the adapter knows the conversation's scope (one session?
+per-user? per-channel? when to reset?), and the same engine also serves stateless
+one-shots (cron jobs that must start fresh each run). So `run_turn` takes a
+`session_id` rather than owning one.
+
+The canonical, dead-simple wiring is **`--remember <file>`** (in both `cli.py` and
+`adapters/run.py`):
+
+```bash
+echo "remember: my number is 42" | ./tui.sh --remember ~/.cache/myagent.session
+echo "what's my number?"         | ./tui.sh --remember ~/.cache/myagent.session   # → 42
+
+# general runner — own cwd/persona/tools, what external projects (Node/cron) call:
+python3 adapters/run.py "<prompt>" --cwd /my/project --remember /my/project/state/session.txt \
+  --tool Read --tool "Bash(node x.js:*)" --max-turns 15
+```
+
+It reads a saved claude session id, `--resume`s it, and writes the new id back — so
+successive turns remember each other. **Delete the file (or `/new` in the TUI) to clear
+it.** Omit `--remember` for stateless one-shots. Under the hood it just threads
+`session_id` through `run_turn`: wire it once per adapter, get memory.
+
 ## What's in the repo
 
 | Piece | What it is |
 |---|---|
 | **`agent.py`** | spawn `claude -p`, scrub env, return reply |
-| **`tui.sh` / `adapters/cli.py`** | terminal REPL |
+| **`tui.sh` / `adapters/cli.py`** | terminal REPL (`--remember <file>` for persistent memory) |
+| **`adapters/run.py`** | general non-interactive runner — own `--cwd`/`--tool`/`--remember`, for shell/Node/cron callers |
 | **`CLAUDE.md.example`** | persona template (real `CLAUDE.md` is gitignored) |
 | **`tools/verify`** | compile + test before you say "done" |
 | **`tools/local/`** | gitignored slot for your private tools |

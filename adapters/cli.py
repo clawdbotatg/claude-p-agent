@@ -453,6 +453,28 @@ def bootstrap_claude_md(*, interactive):
 
 
 def main():
+    # --remember FILE: the canonical memory wiring — persist + resume the claude
+    # session across runs. The REPL already threads session in-memory within a run;
+    # --remember makes it survive restarts (and works for the piped one-shot too).
+    # /new clears it. Omit it and the TUI is stateless across launches as before.
+    remember = None
+    if "--remember" in sys.argv:
+        i = sys.argv.index("--remember")
+        remember = sys.argv[i + 1] if i + 1 < len(sys.argv) else None
+
+    def _load_sid():
+        try:
+            return (open(remember).read().strip() or None) if remember and os.path.isfile(remember) else None
+        except OSError:
+            return None
+
+    def _save_sid(sid):
+        if remember and sid:
+            try:
+                open(remember, "w").write(sid)
+            except OSError:
+                pass
+
     # Non-interactive (piped) input → one-shot, then exit. Guard it like the
     # interactive loop below: a piped turn must never dump a raw traceback on
     # ctrl-c, a closed downstream pipe, or a run_turn error.
@@ -465,7 +487,12 @@ def main():
         msg = sys.stdin.read().strip()
         if msg:
             try:
-                print(run_turn(msg))
+                if remember:
+                    r = run_turn(msg, session_id=_load_sid(), return_meta=True)
+                    _save_sid(r.get("session_id"))
+                    print(r.get("text") or "")
+                else:
+                    print(run_turn(msg))
             except KeyboardInterrupt:  # ctrl-c mid-turn → abort cleanly, no traceback
                 print(f"{DIM}  ⏹ turn aborted{RESET}", file=sys.stderr)
                 sys.exit(130)
@@ -496,7 +523,7 @@ def main():
     # cleared the moment you type a real message, so the double-tap only quits
     # when it's a genuine repeat, not a stop-then-keep-going.
     armed = False
-    session_id = None  # --resume across REPL turns
+    session_id = _load_sid()  # --resume across REPL turns; seeded from --remember if set
     while True:
         try:
             # Open the color before the prompt so the text you type is colored
@@ -521,6 +548,11 @@ def main():
             continue
         if msg.lower() in ("/new", "/clear"):
             session_id = None
+            if remember:
+                try:
+                    os.remove(remember)
+                except OSError:
+                    pass
             print(f"{DIM}  fresh session{rs}")
             continue
         try:
@@ -537,6 +569,7 @@ def main():
                 )
             if result.get("session_id"):
                 session_id = result["session_id"]
+                _save_sid(session_id)
             reply = result.get("text") or ""
             final = (reply or state.get("text") or "").strip()
             if final:
