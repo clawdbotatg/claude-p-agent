@@ -28,3 +28,6 @@ __pycache__/
 *.token.json
 .*-token.json
 *-log.jsonl
+
+# engine-owned conversation memory (session-id store)
+.memory/

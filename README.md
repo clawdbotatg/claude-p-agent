@@ -54,36 +54,40 @@ export CLAUDE_P_AGENT_HOME=/path/to/claude-p-agent
 
 ## Memory
 
-The engine is **stateless** — a turn is a pure function. **Memory is the adapter's
-job**, on purpose: only the adapter knows the conversation's scope (one session?
-per-user? per-channel? when to reset?), and the same engine also serves stateless
-one-shots (cron jobs that must start fresh each run). So `run_turn` takes a
-`session_id` rather than owning one.
-
-The canonical, dead-simple wiring is **`--remember <file>`** (in both `cli.py` and
-`adapters/run.py`):
+**One system, everywhere: a conversation has a *key*, and the agent remembers it.**
+That's the whole model. The only thing any adapter decides is *what its key is* —
+a chat id, a thread name, a user id, anything stable.
 
 ```bash
-echo "remember: my number is 42" | ./tui.sh --remember ~/.cache/myagent.session
-echo "what's my number?"         | ./tui.sh --remember ~/.cache/myagent.session   # → 42
+# Python (in-process callers — PM, TUI, your own adapter):
+run_turn("remember: my number is 42", remember="alice")
+run_turn("what's my number?",          remember="alice")   # → 42
 
-# general runner — own cwd/persona/tools, what external projects (Node/cron) call:
-python3 adapters/run.py "<prompt>" --cwd /my/project --remember /my/project/state/session.txt \
+# CLI (shell / Node / cron — anything that shells out):
+python3 adapters/run.py "<prompt>" --cwd /my/project --remember alice \
   --tool Read --tool "Bash(node x.js:*)" --max-turns 15
+python3 adapters/run.py --forget alice          # reset that conversation
 ```
 
-It reads a saved claude session id, `--resume`s it, and writes the new id back — so
-successive turns remember each other. **Delete the file (or `/new` in the TUI) to clear
-it.** Omit `--remember` for stateless one-shots. Under the hood it just threads
-`session_id` through `run_turn`: wire it once per adapter, get memory.
+- **Same key → continues. New key → fresh. No `remember` → stateless one-shot**
+  (what cron jobs want — they must start clean each run).
+- The **engine owns every mechanic** — it loads the key's stored claude `session_id`,
+  `--resume`s it, captures the new id (incl. the awkward blocking-turn case), and saves
+  it back. Adapters never touch a `session_id`. Wire `remember=<key>` once; get memory.
+- A key is a **name** (stored in the engine's `.memory/` dir) or a **path** (contains a
+  `/` → you pin the location, e.g. inside your project's `state/`). Reset = `forget(key)`
+  / `--forget key`, or `/new` in the TUI.
+- The **TUI remembers by default** (key `tui`); programmatic `run.py` is **opt-in**
+  (pass `--remember` or stay stateless). That split is deliberate: a chat remembers, a
+  script doesn't unless it asks.
 
 ## What's in the repo
 
 | Piece | What it is |
 |---|---|
 | **`agent.py`** | spawn `claude -p`, scrub env, return reply |
-| **`tui.sh` / `adapters/cli.py`** | terminal REPL (`--remember <file>` for persistent memory) |
-| **`adapters/run.py`** | general non-interactive runner — own `--cwd`/`--tool`/`--remember`, for shell/Node/cron callers |
+| **`tui.sh` / `adapters/cli.py`** | terminal REPL (remembers by default; `--remember <key>` to pick a conversation) |
+| **`adapters/run.py`** | general non-interactive runner — own `--cwd`/`--tool`/`--remember <key>`, for shell/Node/cron callers |
 | **`CLAUDE.md.example`** | persona template (real `CLAUDE.md` is gitignored) |
 | **`tools/verify`** | compile + test before you say "done" |
 | **`tools/local/`** | gitignored slot for your private tools |

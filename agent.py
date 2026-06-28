@@ -21,6 +21,7 @@ Config via `.env` in the repo root (auto-loaded; real env wins):
 """
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -114,6 +115,64 @@ def _claude_cmd(text, flags, input_via="argv"):
     return [bin_, "-p"] + flags
 
 
+# ── memory ───────────────────────────────────────────────────────────────────
+# ONE system, everywhere: a turn "remembers" by keeping a single claude session_id
+# per *conversation key* and `--resume`-ing it. The engine owns the whole mechanic —
+# load the key's id, resume, capture the new id, save it back — so no adapter ever
+# hand-rolls session juggling again. Pass `remember=<key>` to run_turn (or omit for a
+# stateless one-shot). Same key continues; new key is fresh; forget(key) resets.
+
+def _memory_root():
+    return os.path.abspath(os.path.expanduser(
+        os.environ.get("CLAUDE_P_AGENT_MEMORY") or os.path.join(agent_home(), ".memory")
+    ))
+
+
+def _memory_path(key):
+    """A conversation key → the file holding its session id. A key that looks like a
+    path (has a separator) is used as-is so a caller can pin the location; a plain
+    name is stored in the engine-owned memory dir."""
+    key = str(key)
+    if "/" in key or os.sep in key:
+        return os.path.abspath(os.path.expanduser(key))
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", key).strip("._") or "default"
+    return os.path.join(_memory_root(), safe + ".session")
+
+
+def _read_session(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def _write_session(path, sid):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(sid)
+
+
+def _parse_json_result(raw):
+    """claude --output-format json → (reply_text, session_id)."""
+    try:
+        d = json.loads(raw)
+    except (ValueError, TypeError):
+        return raw, None
+    if isinstance(d, dict):
+        return (d.get("result") or "").strip(), d.get("session_id")
+    return raw, None
+
+
+def forget(key):
+    """Clear one conversation's memory. Returns True if anything was removed."""
+    try:
+        os.remove(_memory_path(key))
+        return True
+    except OSError:
+        return False
+
+
 def run_turn(
     text,
     *,
@@ -127,10 +186,15 @@ def run_turn(
     return_meta=False,
     proc_holder=None,
     timeout=None,
+    remember=None,
 ):
     """Run one agent turn.
 
     `append_system_prompt` — channel policy from the adapter (engine has none).
+    `remember` — conversation key (or path); when set, the engine loads that
+        conversation's stored session id, `--resume`s it, and saves the new id back,
+        so successive turns with the same key remember each other. Omit for a
+        stateless one-shot. `session_id` (if passed) overrides the stored id.
     `on_event` — if set, run stream-json and fire the callback per event.
     `input_via` — \"argv\" (default) or \"stdin\" (prompt written to stdin).
     `return_meta` — if True, return {\"text\", \"session_id\"}; else return str.
@@ -138,6 +202,18 @@ def run_turn(
     """
     workdir = os.path.abspath(cwd or AGENT_DIR)
     stream = on_event is not None
+    extra_args = list(extra_args or [])
+
+    mem_path = _memory_path(remember) if remember else None
+    if mem_path and session_id is None:
+        session_id = _read_session(mem_path)
+    # A blocking turn can't report the new id through stream events, so ask claude
+    # for its JSON envelope and parse the id out. This wart lives here, once, not in
+    # every adapter.
+    capture_blocking = bool(remember) and not stream
+    if capture_blocking and "--output-format" not in extra_args:
+        extra_args += ["--output-format", "json"]
+
     flags = _build_flags(
         append_system_prompt=append_system_prompt,
         session_id=session_id,
@@ -163,10 +239,18 @@ def run_turn(
             input_via=input_via, proc_holder=proc_holder,
         )
     else:
-        final = _run_blocking(
+        raw = _run_blocking(
             cmd, text, workdir, input_via=input_via, timeout=timeout,
         )
-        # Non-streaming json output could add session capture later if needed.
+        if capture_blocking:
+            final, sid = _parse_json_result(raw)
+            if sid:
+                meta["session_id"] = sid
+        else:
+            final = raw
+
+    if mem_path and meta["session_id"]:
+        _write_session(mem_path, meta["session_id"])
 
     if return_meta:
         return {"text": final, "session_id": meta["session_id"]}
