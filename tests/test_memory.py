@@ -47,10 +47,13 @@ class MemoryTest(unittest.TestCase):
     def test_write_read_forget_roundtrip(self):
         path = agent._memory_path("conv1")
         self.assertIsNone(agent._read_session(path))
+        self.assertIsNone(agent.current_session("conv1"))
         agent._write_session(path, "sess-abc-123")
         self.assertEqual(agent._read_session(path), "sess-abc-123")
+        self.assertEqual(agent.current_session("conv1"), "sess-abc-123")
         self.assertTrue(agent.forget("conv1"))
         self.assertIsNone(agent._read_session(path))
+        self.assertIsNone(agent.current_session("conv1"))
         self.assertFalse(agent.forget("conv1"))  # already gone
 
     def test_parse_json_result(self):

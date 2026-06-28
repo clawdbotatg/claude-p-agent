@@ -178,6 +178,12 @@ def forget(key):
         return False
 
 
+def current_session(key):
+    """The claude session id stored for a conversation key (or None) — read without
+    running a turn. For callers that need to publish/inspect the live session id."""
+    return _read_session(_memory_path(key)) if key else None
+
+
 def run_turn(
     text,
     *,

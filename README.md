@@ -81,6 +81,12 @@ python3 adapters/run.py --forget alice          # reset that conversation
   (pass `--remember` or stay stateless). That split is deliberate: a chat remembers, a
   script doesn't unless it asks.
 
+**This is the default — reach for it unless you have a concrete reason not to.** Need the
+session id for something external (a context gauge, a dashboard)? You don't have to give up
+`remember=` for that — `run_turn(..., return_meta=True)` still hands you the `session_id`
+(and `current_session(key)` reads it without a turn), so publish it from there. Hand-rolling
+the whole session yourself is a rare exception, not the norm. If you're unsure: `remember=<key>`.
+
 ## What's in the repo
 
 | Piece | What it is |
