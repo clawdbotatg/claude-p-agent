@@ -9,6 +9,7 @@ adapters/ (Telegram, web, etc.) — see skills/extend/SKILL.md.
 """
 import codecs
 import itertools
+import json
 import os
 import re
 import shutil
@@ -488,9 +489,15 @@ def main():
         if msg:
             try:
                 if remember:
-                    r = run_turn(msg, session_id=_load_sid(), return_meta=True)
-                    _save_sid(r.get("session_id"))
-                    print(r.get("text") or "")
+                    # A blocking (non-streamed) turn can't report the new session id via
+                    # return_meta, so read it from claude's JSON envelope (like run.py).
+                    raw = run_turn(msg, session_id=_load_sid(), extra_args=["--output-format", "json"])
+                    try:
+                        d = json.loads(raw)
+                        _save_sid(d.get("session_id"))
+                        print(d.get("result") or "")
+                    except (ValueError, TypeError):
+                        print(raw)
                 else:
                     print(run_turn(msg))
             except KeyboardInterrupt:  # ctrl-c mid-turn → abort cleanly, no traceback
