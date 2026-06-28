@@ -153,15 +153,20 @@ def _write_session(path, sid):
         f.write(sid)
 
 
+_META_KEYS = ("session_id", "num_turns", "duration_ms")
+
+
 def _parse_json_result(raw):
-    """claude --output-format json → (reply_text, session_id)."""
+    """claude --output-format json → (reply_text, meta) where meta may carry
+    session_id / num_turns / duration_ms."""
     try:
         d = json.loads(raw)
     except (ValueError, TypeError):
-        return raw, None
-    if isinstance(d, dict):
-        return (d.get("result") or "").strip(), d.get("session_id")
-    return raw, None
+        return raw, {}
+    if not isinstance(d, dict):
+        return raw, {}
+    meta = {k: d[k] for k in _META_KEYS if d.get(k) is not None}
+    return (d.get("result") or "").strip(), meta
 
 
 def forget(key):
@@ -226,12 +231,14 @@ def run_turn(
     meta = {"session_id": session_id}
 
     def _track_session(event):
-        if event.get("type") == "system" and event.get("subtype") == "init":
-            sid = event.get("session_id")
-            if sid:
-                meta["session_id"] = sid
-        elif event.get("type") == "result" and event.get("session_id"):
-            meta["session_id"] = event["session_id"]
+        et = event.get("type")
+        if et == "system" and event.get("subtype") == "init":
+            if event.get("session_id"):
+                meta["session_id"] = event["session_id"]
+        elif et == "result":
+            for k in _META_KEYS:
+                if event.get(k) is not None:
+                    meta[k] = event[k]
 
     if stream:
         final = _run_streaming(
@@ -243,17 +250,16 @@ def run_turn(
             cmd, text, workdir, input_via=input_via, timeout=timeout,
         )
         if capture_blocking:
-            final, sid = _parse_json_result(raw)
-            if sid:
-                meta["session_id"] = sid
+            final, m = _parse_json_result(raw)
+            meta.update(m)
         else:
             final = raw
 
-    if mem_path and meta["session_id"]:
+    if mem_path and meta.get("session_id"):
         _write_session(mem_path, meta["session_id"])
 
     if return_meta:
-        return {"text": final, "session_id": meta["session_id"]}
+        return {"text": final, **{k: meta.get(k) for k in _META_KEYS}}
     return final
 
 

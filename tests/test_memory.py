@@ -54,10 +54,14 @@ class MemoryTest(unittest.TestCase):
         self.assertFalse(agent.forget("conv1"))  # already gone
 
     def test_parse_json_result(self):
-        text, sid = agent._parse_json_result('{"result": "hi", "session_id": "s1"}')
-        self.assertEqual((text, sid), ("hi", "s1"))
-        text, sid = agent._parse_json_result("not json")
-        self.assertEqual((text, sid), ("not json", None))
+        text, meta = agent._parse_json_result(
+            '{"result": "hi", "session_id": "s1", "num_turns": 2, "duration_ms": 99}')
+        self.assertEqual(text, "hi")
+        self.assertEqual(meta.get("session_id"), "s1")
+        self.assertEqual(meta.get("num_turns"), 2)
+        self.assertEqual(meta.get("duration_ms"), 99)
+        text, meta = agent._parse_json_result("not json")
+        self.assertEqual((text, meta), ("not json", {}))
 
 
 if __name__ == "__main__":
