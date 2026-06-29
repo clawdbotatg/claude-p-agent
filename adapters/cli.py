@@ -453,14 +453,16 @@ def bootstrap_claude_md(*, interactive):
 
 
 def main():
-    # The TUI is an interactive chat, so it REMEMBERS by default (engine-owned memory,
-    # under the conversation key "tui"). `--remember <key>` picks a different
-    # conversation; /new (or `run.py --forget tui`) resets it. There is no in-adapter
-    # session juggling — run_turn(remember=key) does load → resume → capture → save.
-    remember = "tui"
+    # MEMORY. The TUI is EPHEMERAL by default: each instance gets its OWN claude
+    # session (held in-memory for this run only), so two TUIs running at once are two
+    # separate threads, and closing one then opening another starts fresh — like /new.
+    # Pass `--remember <key>` to make it PERSISTENT: that conversation survives
+    # close/reopen, and two instances with the SAME key deliberately share one thread.
+    # So: no flag → private & throwaway · --remember <key> → durable & (optionally) shared.
+    remember = None
     if "--remember" in sys.argv:
         i = sys.argv.index("--remember")
-        remember = (sys.argv[i + 1] if i + 1 < len(sys.argv) else None) or "tui"
+        remember = (sys.argv[i + 1] if i + 1 < len(sys.argv) else None) or None
 
     # Non-interactive (piped) input → one-shot, then exit. Guard it like the
     # interactive loop below: a piped turn must never dump a raw traceback on
@@ -505,6 +507,10 @@ def main():
     # cleared the moment you type a real message, so the double-tap only quits
     # when it's a genuine repeat, not a stop-then-keep-going.
     armed = False
+    # Ephemeral session for the no---remember case: continuity WITHIN this run only,
+    # never persisted — so a second TUI is a separate thread and reopening is fresh.
+    # When --remember <key> is set, the engine owns the session via the key instead.
+    session_id = None
     while True:
         try:
             # Open the color before the prompt so the text you type is colored
@@ -528,7 +534,9 @@ def main():
         if not msg:
             continue
         if msg.lower() in ("/new", "/clear"):
-            forget(remember)
+            if remember:
+                forget(remember)
+            session_id = None
             print(f"{DIM}  fresh session{rs}")
             continue
         try:
@@ -541,8 +549,12 @@ def main():
                 emit = spin.emit if spin.enabled else print
                 on_event, state = make_renderer(color, emit=emit)
                 result = run_turn(
-                    msg, on_event=on_event, remember=remember, return_meta=True,
+                    msg, on_event=on_event, return_meta=True,
+                    remember=remember,
+                    session_id=(None if remember else session_id),
                 )
+            if not remember:                      # carry continuity within THIS run only
+                session_id = result.get("session_id") or session_id
             reply = result.get("text") or ""
             final = (reply or state.get("text") or "").strip()
             if final:

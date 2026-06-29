@@ -77,9 +77,12 @@ python3 adapters/run.py --forget alice          # reset that conversation
 - A key is a **name** (stored in the engine's `.memory/` dir) or a **path** (contains a
   `/` → you pin the location, e.g. inside your project's `state/`). Reset = `forget(key)`
   / `--forget key`, or `/new` in the TUI.
-- The **TUI remembers by default** (key `tui`); programmatic `run.py` is **opt-in**
-  (pass `--remember` or stay stateless). That split is deliberate: a chat remembers, a
-  script doesn't unless it asks.
+- The **TUI is ephemeral by default** — each instance is its own throwaway session
+  (two TUIs at once = two separate threads; closing one and reopening starts fresh, like
+  `/new`). Pass **`--remember <key>`** to make it persistent — that conversation survives
+  close/reopen, and two instances with the *same* key deliberately share one thread.
+  `run.py` is likewise stateless unless you pass `--remember`. You persist or share only
+  when you ask to.
 
 **This is the default — reach for it unless you have a concrete reason not to.** Need the
 session id for something external (a context gauge, a dashboard)? You don't have to give up
