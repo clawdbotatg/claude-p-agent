@@ -452,15 +452,34 @@ def bootstrap_claude_md(*, interactive):
     return name
 
 
+def _default_remember():
+    """The conversation key to use when `--remember` isn't given.
+
+    Default it off the controlling terminal so two TUIs opened in the SAME agent
+    folder are naturally two separate memories (each terminal its own session),
+    while a given terminal still resumes its own memory across restarts. With no
+    tty (piped / redirected input) there's nothing to key on, so fall back to the
+    shared "tui" key — preserving the original one-shot behavior."""
+    try:
+        name = os.ttyname(sys.stdin.fileno())  # e.g. /dev/ttys003
+    except (OSError, ValueError, AttributeError):
+        return "tui"
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-")
+    return f"tui-{slug}" if slug else "tui"
+
+
 def main():
-    # The TUI is an interactive chat, so it REMEMBERS by default (engine-owned memory,
-    # under the conversation key "tui"). `--remember <key>` picks a different
-    # conversation; /new (or `run.py --forget tui`) resets it. There is no in-adapter
-    # session juggling — run_turn(remember=key) does load → resume → capture → save.
-    remember = "tui"
+    # The TUI is an interactive chat, so it REMEMBERS by default (engine-owned memory).
+    # The default conversation key is per-terminal (see _default_remember) so two TUIs
+    # in the same folder don't collide on one session; `--remember <key>` pins an
+    # explicit one; /new resets the active key. There is no in-adapter session
+    # juggling — run_turn(remember=key) does load → resume → capture → save.
+    remember = ""
     if "--remember" in sys.argv:
         i = sys.argv.index("--remember")
-        remember = (sys.argv[i + 1] if i + 1 < len(sys.argv) else None) or "tui"
+        remember = (sys.argv[i + 1] if i + 1 < len(sys.argv) else None) or ""
+    if not remember:
+        remember = _default_remember()
 
     # Non-interactive (piped) input → one-shot, then exit. Guard it like the
     # interactive loop below: a piped turn must never dump a raw traceback on
