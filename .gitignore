@@ -31,3 +31,6 @@ __pycache__/
 
 # engine-owned conversation memory (session-id store)
 .memory/
+
+# watchdog failure counter
+.watchdog-fails

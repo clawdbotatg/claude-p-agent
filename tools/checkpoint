@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""checkpoint — certify HEAD as a body worth returning to.
+
+Requires a clean tree (committing is your job; certifying is this tool's).
+Runs verify + smoke; if green, moves the `known-good` tag to HEAD — the commit
+tools/watchdog resets to when the agent is too broken to fix itself — and backs
+up the gitignored self-parts (CLAUDE.md, .env, tools/local/) outside the repo,
+where git resets and machine loss can't reach.
+
+  tools/checkpoint
+"""
+import os
+import shutil
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BACKUP = os.path.expanduser(
+    os.environ.get("CLAUDE_P_AGENT_BACKUP", "~/.claude-p-agent-backup")
+)
+
+
+def die(msg):
+    print(f"checkpoint: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def run(cmd):
+    return subprocess.run(cmd, cwd=HERE).returncode == 0
+
+
+dirty = subprocess.run(
+    ["git", "status", "--porcelain"], cwd=HERE, capture_output=True, text=True
+).stdout.strip()
+if dirty:
+    die("tree is dirty — commit first, then checkpoint:\n" + dirty)
+
+if not run([sys.executable, os.path.join(HERE, "tools", "verify")]):
+    die("verify failed — not certifying")
+if not run([sys.executable, os.path.join(HERE, "tools", "smoke")]):
+    die("smoke failed — not certifying")
+
+if not run(["git", "tag", "-f", "known-good"]):
+    die("could not move known-good tag")
+
+dest = os.path.join(BACKUP, os.path.basename(HERE))
+os.makedirs(dest, exist_ok=True)
+for name in ("CLAUDE.md", ".env"):
+    src = os.path.join(HERE, name)
+    if os.path.isfile(src):
+        shutil.copy2(src, os.path.join(dest, name))
+local = os.path.join(HERE, "tools", "local")
+if os.path.isdir(local):
+    shutil.copytree(local, os.path.join(dest, "tools-local"), dirs_exist_ok=True)
+
+head = subprocess.run(
+    ["git", "rev-parse", "--short", "HEAD"], cwd=HERE, capture_output=True, text=True
+).stdout.strip()
+print(f"checkpoint: known-good -> {head}; persona backed up to {dest}")
+print("checkpoint: push when ready: git push && git push -f origin known-good")

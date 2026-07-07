@@ -1,0 +1,28 @@
+#!/bin/sh
+# watchdog — the dumb external healer. No AI on purpose: the failure it exists
+# for is "AI unavailable." Checks the agent compiles and its tests pass (free,
+# no claude spend); after 2 consecutive failures resets TRACKED files to the
+# known-good tag (untracked persona/.env are never touched) and logs loudly.
+#
+# Install (cron):  */30 * * * * /path/to/tools/watchdog >> "$HOME/.claude-p-agent-watchdog.log" 2>&1
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
+STAMP="$HERE/.watchdog-fails"
+
+if (cd "$HERE" && python3 tools/verify >/dev/null 2>&1); then
+    rm -f "$STAMP"
+    exit 0
+fi
+
+fails=$(( $(cat "$STAMP" 2>/dev/null || echo 0) + 1 ))
+echo "$fails" > "$STAMP"
+echo "watchdog: verify FAILED ($fails) at $(date)"
+[ "$fails" -lt 2 ] && exit 1
+
+if git -C "$HERE" rev-parse -q --verify known-good >/dev/null; then
+    echo "watchdog: resetting to known-good ($(git -C "$HERE" rev-parse --short known-good))"
+    git -C "$HERE" reset --hard known-good
+    rm -f "$STAMP"
+else
+    echo "watchdog: no known-good tag — cannot self-heal, human needed"
+fi
+exit 1

@@ -18,8 +18,17 @@ before saying something works.
 ## Your tools
 
 - `tools/verify` — run after code changes; don't claim "fixed" until it passes.
+- `tools/smoke` — one live turn, exit code: am I alive?
+- `tools/checkpoint` — after a self-change is committed: certify HEAD as `known-good` + back up your persona.
 
 Add more here as you build them.
+
+## Changing yourself
+
+Any edit to your own code, tools, skills, or persona follows **`skills/self/SKILL.md`**
+— ring rules (how much ceremony a file needs), the change protocol
+(verify → commit → checkpoint), and how you recover when broken. Read yourself
+instead of guessing about yourself.
 
 ## How you speak
 

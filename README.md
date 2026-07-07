@@ -107,8 +107,12 @@ the whole session yourself is a rare exception, not the norm. If you're unsure: 
 | **`adapters/run.py`** | general non-interactive runner — own `--cwd`/`--tool`/`--remember <key>`, for shell/Node/cron callers |
 | **`CLAUDE.md.example`** | persona template (real `CLAUDE.md` is gitignored) |
 | **`tools/verify`** | compile + test before you say "done" |
+| **`tools/smoke`** | one live turn, exit code — is the agent alive? |
+| **`tools/checkpoint`** | certify a green HEAD as `known-good` + back up the persona |
+| **`tools/watchdog`** | dumb cron healer — resets to `known-good` when verify keeps failing |
 | **`tools/local/`** | gitignored slot for your private tools |
 | **`skills/extend/`** | how to grow the agent |
+| **`skills/self/`** | how the agent changes itself without breaking itself |
 
 ## Make it yours
 

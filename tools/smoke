@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+"""smoke — am I alive? One live turn through the whole spawn path.
+
+Exercises what tools/verify can't: the claude CLI, auth, env scrub, and
+CLAUDE.md loading. Costs one (cheap) subscription turn — run after self-changes,
+not on a tight loop.
+
+  tools/smoke              # exit 0 = alive, 1 = broken
+"""
+import os
+import sys
+
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, HERE)
+from agent import run_turn  # noqa: E402
+
+try:
+    reply = run_turn("Health check. Reply with exactly: SMOKE-OK", timeout=120)
+except Exception as e:
+    print(f"smoke: FAILED — {e}", file=sys.stderr)
+    sys.exit(1)
+
+if "SMOKE-OK" in (reply or ""):
+    print("smoke: alive")
+    sys.exit(0)
+print(f"smoke: FAILED — unexpected reply: {reply!r}", file=sys.stderr)
+sys.exit(1)
