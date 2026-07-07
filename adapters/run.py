@@ -35,6 +35,9 @@ ap.add_argument("--timeout", type=int, help="seconds; run_turn kills claude on t
 ap.add_argument("--remember", metavar="KEY",
                 help="conversation key (or path) — resume+persist memory across turns")
 ap.add_argument("--forget", metavar="KEY", help="clear a conversation's memory and exit")
+ap.add_argument("--no-auto-memory", action="store_true",
+                help="disable Claude Code's per-project auto-memory for this turn "
+                     "(it persists user facts across ALL keys and stateless runs in a cwd)")
 a = ap.parse_args()
 
 if a.forget:
@@ -48,7 +51,8 @@ if a.max_turns:
     extra += ["--max-turns", str(a.max_turns)]
 
 try:
-    out = run_turn(prompt, cwd=a.cwd, extra_args=extra, remember=a.remember, timeout=a.timeout)
+    out = run_turn(prompt, cwd=a.cwd, extra_args=extra, remember=a.remember,
+                   timeout=a.timeout, auto_memory=not a.no_auto_memory)
 except Exception as e:
     sys.stderr.write(f"run: {e}\n")
     sys.exit(1)

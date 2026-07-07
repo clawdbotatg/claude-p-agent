@@ -71,6 +71,14 @@ python3 adapters/run.py --forget alice          # reset that conversation
 
 - **Same key → continues. New key → fresh. No `remember` → stateless one-shot**
   (what cron jobs want — they must start clean each run).
+- **A second memory layer lives underneath**: Claude Code's own **auto-memory**
+  saves durable user facts to `~/.claude/projects/<cwd>/memory/` and loads them
+  into *every* session in that cwd — across keys and even "stateless" runs. So
+  `remember: my number is 42` above can come back on a *fresh* key too (as a
+  saved user fact, not a session). For a single-owner agent brain that's a
+  feature. When it isn't — cron jobs that must start truly clean, or per-user
+  keys that must not see each other's facts — pass `auto_memory=False`
+  (`--no-auto-memory` on `run.py`) to turn it off for that turn.
 - The **engine owns every mechanic** — it loads the key's stored claude `session_id`,
   `--resume`s it, captures the new id (incl. the awkward blocking-turn case), and saves
   it back. Adapters never touch a `session_id`. Wire `remember=<key>` once; get memory.

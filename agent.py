@@ -70,6 +70,15 @@ def scrubbed_env():
     return env
 
 
+def _child_env(auto_memory=True):
+    # The scrub above eats every CLAUDE_CODE_* var — including a user's own
+    # CLAUDE_CODE_DISABLE_AUTO_MEMORY — so the opt-out has to be re-injected here.
+    env = scrubbed_env()
+    if not auto_memory:
+        env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+    return env
+
+
 def read_prompt(path):
     """Read a prompt file. Adapters own the paths."""
     with open(path, encoding="utf-8") as f:
@@ -198,6 +207,7 @@ def run_turn(
     proc_holder=None,
     timeout=None,
     remember=None,
+    auto_memory=True,
 ):
     """Run one agent turn.
 
@@ -206,6 +216,11 @@ def run_turn(
         conversation's stored session id, `--resume`s it, and saves the new id back,
         so successive turns with the same key remember each other. Omit for a
         stateless one-shot. `session_id` (if passed) overrides the stored id.
+    `auto_memory` — Claude Code's own per-project auto-memory (durable facts under
+        ~/.claude/projects/<cwd>/memory/, loaded by EVERY session in that cwd — it
+        crosses conversation keys and stateless runs). False disables it for this
+        turn: the fully-clean option for cron one-shots, or for per-user keys that
+        must not see each other's facts.
     `on_event` — if set, run stream-json and fire the callback per event.
     `input_via` — \"argv\" (default) or \"stdin\" (prompt written to stdin).
     `return_meta` — if True, return {\"text\", \"session_id\"}; else return str.
@@ -246,14 +261,16 @@ def run_turn(
                 if event.get(k) is not None:
                     meta[k] = event[k]
 
+    env = _child_env(auto_memory)
+
     if stream:
         final = _run_streaming(
             cmd, text, workdir, on_event, _track_session,
-            input_via=input_via, proc_holder=proc_holder,
+            input_via=input_via, proc_holder=proc_holder, env=env,
         )
     else:
         raw = _run_blocking(
-            cmd, text, workdir, input_via=input_via, timeout=timeout,
+            cmd, text, workdir, input_via=input_via, timeout=timeout, env=env,
         )
         if capture_blocking:
             final, m = _parse_json_result(raw)
@@ -269,8 +286,8 @@ def run_turn(
     return final
 
 
-def _run_blocking(cmd, text, cwd, input_via="argv", timeout=None):
-    env = scrubbed_env()
+def _run_blocking(cmd, text, cwd, input_via="argv", timeout=None, env=None):
+    env = env if env is not None else _child_env()
     try:
         if input_via == "stdin":
             proc = subprocess.run(
@@ -291,8 +308,8 @@ def _run_blocking(cmd, text, cwd, input_via="argv", timeout=None):
 
 
 def _run_streaming(cmd, text, cwd, on_event, track_session, input_via="argv",
-                   proc_holder=None):
-    env = scrubbed_env()
+                   proc_holder=None, env=None):
+    env = env if env is not None else _child_env()
     proc = subprocess.Popen(
         cmd, cwd=cwd, env=env, text=True, bufsize=1,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,

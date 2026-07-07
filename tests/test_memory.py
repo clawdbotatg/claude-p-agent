@@ -67,5 +67,25 @@ class MemoryTest(unittest.TestCase):
         self.assertEqual((text, meta), ("not json", {}))
 
 
+class ChildEnvTest(unittest.TestCase):
+    """Claude Code's auto-memory is a second persistence layer under the key system;
+    auto_memory=False must survive the CLAUDE_CODE_* scrub that would otherwise eat
+    a user's own opt-out var."""
+
+    def test_scrub_eats_users_own_optout(self):
+        os.environ["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+        try:
+            self.assertNotIn("CLAUDE_CODE_DISABLE_AUTO_MEMORY", agent.scrubbed_env())
+        finally:
+            os.environ.pop("CLAUDE_CODE_DISABLE_AUTO_MEMORY", None)
+
+    def test_auto_memory_default_on(self):
+        self.assertNotIn("CLAUDE_CODE_DISABLE_AUTO_MEMORY", agent._child_env())
+
+    def test_auto_memory_false_injects_optout(self):
+        env = agent._child_env(auto_memory=False)
+        self.assertEqual(env.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY"), "1")
+
+
 if __name__ == "__main__":
     unittest.main()
