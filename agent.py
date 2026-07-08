@@ -76,7 +76,152 @@ def _child_env(auto_memory=True):
     env = scrubbed_env()
     if not auto_memory:
         env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+    _route_subscription(env)
     return env
+
+
+# ── subscription router (built in, on by default) ────────────────────────────
+# If this box holds multiple Claude subscription logins — one config dir per
+# plan under ~/.clawd-accounts/<name>, each signed in ONCE via
+#   CLAUDE_CONFIG_DIR=~/.clawd-accounts/<name> claude /login
+# (the clawd-harness accounts page manages these) — then every turn runs on
+# the plan with the MOST HEADROOM right now. Usage comes from Claude's OAuth
+# usage endpoint (undocumented: every failure degrades to "don't route"),
+# cached for CLAUDE_P_ROUTER_TTL seconds. The plain ~/.claude login
+# participates as `default`. An operator-set CLAUDE_CONFIG_DIR always wins
+# (explicit pin > router). Boxes with no account dirs behave exactly as
+# before. Disable with CLAUDE_P_ROUTER=0.
+ROUTER_ON = os.environ.get("CLAUDE_P_ROUTER", "1") != "0"
+ROUTER_TTL = float(os.environ.get("CLAUDE_P_ROUTER_TTL", "600"))
+ACCOUNTS_DIR = os.path.expanduser(
+    os.environ.get("CLAWD_ACCOUNTS_DIR", "~/.clawd-accounts"))
+OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"  # Claude Code's public id
+OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
+OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+OAUTH_BETA = "oauth-2025-04-20"
+_usage_cache = {}                  # account name -> {"pct": float, "ts": float}
+_route_state = {"name": None}
+
+
+def _keychain_service(config_dir):
+    """Claude Code's own Keychain item derivation (macOS)."""
+    if not config_dir:
+        return "Claude Code-credentials"
+    import hashlib, unicodedata
+    nfc = unicodedata.normalize("NFC", config_dir)
+    return "Claude Code-credentials-" + hashlib.sha256(nfc.encode()).hexdigest()[:8]
+
+
+def _read_creds(config_dir):
+    try:
+        r = subprocess.run(["security", "find-generic-password",
+                            "-s", _keychain_service(config_dir),
+                            "-a", os.environ.get("USER", ""), "-w"],
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode == 0 and r.stdout.strip():
+            return json.loads(r.stdout.strip())
+    except Exception:
+        pass
+    path = os.path.join(config_dir or os.path.expanduser("~/.claude"),
+                        ".credentials.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _usage_pct(config_dir):
+    """% used of the most-constrained window for one login, or None."""
+    import urllib.request, urllib.error
+    oauth = (_read_creds(config_dir) or {}).get("claudeAiOauth") or {}
+    access, refresh = oauth.get("accessToken"), oauth.get("refreshToken")
+    if not access:
+        return None
+
+    def call(tok):
+        req = urllib.request.Request(OAUTH_USAGE_URL, headers={
+            "Authorization": f"Bearer {tok}", "anthropic-beta": OAUTH_BETA})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, json.loads(r.read().decode())
+        except urllib.error.HTTPError as e:
+            return e.code, None
+        except Exception:
+            return None, None
+
+    code, usage = call(access)
+    if code == 401 and refresh:
+        req = urllib.request.Request(
+            OAUTH_TOKEN_URL, method="POST",
+            headers={"Content-Type": "application/json"},
+            data=json.dumps({"grant_type": "refresh_token",
+                             "refresh_token": refresh,
+                             "client_id": OAUTH_CLIENT_ID}).encode())
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                fresh = json.loads(r.read().decode()).get("access_token")
+        except Exception:
+            fresh = None
+        if fresh:
+            code, usage = call(fresh)
+    if code != 200 or not isinstance(usage, dict):
+        return None
+    worst = None
+    for key in ("five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet"):
+        w = usage.get(key)
+        u = w.get("utilization") if isinstance(w, dict) else w
+        if isinstance(u, (int, float)):
+            worst = u if worst is None else max(worst, u)
+    return worst
+
+
+def _route_subscription(env):
+    """Point the child at the plan with the most headroom (see block comment)."""
+    if not ROUTER_ON or os.environ.get("CLAUDE_CONFIG_DIR"):
+        return                                   # off, or operator pinned a dir
+    candidates = [("default", "")]
+    try:
+        candidates += sorted(
+            (d.name, os.path.join(ACCOUNTS_DIR, d.name))
+            for d in os.scandir(ACCOUNTS_DIR) if d.is_dir())
+    except OSError:
+        pass
+    if len(candidates) < 2:
+        return                                   # nothing to route between
+    import time as _t
+    now = _t.time()
+    best_name, best_cfg, best_pct = None, None, None
+    for name, cfg in candidates:
+        c = _usage_cache.get(name)
+        if not c or now - c["ts"] > ROUTER_TTL:
+            pct = _usage_pct(cfg)
+            if pct is None:
+                _usage_cache.pop(name, None)
+                continue                         # not signed in / endpoint down
+            c = {"pct": pct, "ts": now}
+            _usage_cache[name] = c
+        if best_pct is None or c["pct"] < best_pct:
+            best_name, best_cfg, best_pct = name, cfg, c["pct"]
+    if best_name is None:
+        return
+    if best_cfg:
+        # share the transcript store so sessions resume under any plan
+        src = os.path.expanduser("~/.claude/projects")
+        dst = os.path.join(best_cfg, "projects")
+        try:
+            os.makedirs(src, exist_ok=True)
+            if not os.path.lexists(dst):
+                os.symlink(src, dst)
+        except OSError:
+            pass
+        env["CLAUDE_CONFIG_DIR"] = best_cfg
+    else:
+        env.pop("CLAUDE_CONFIG_DIR", None)
+    if best_name != _route_state["name"]:
+        _route_state["name"] = best_name
+        print(f"[router] turns run on plan {best_name!r} ({best_pct:.0f}% used)",
+              file=sys.stderr, flush=True)
 
 
 def read_prompt(path):
