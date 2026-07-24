@@ -3,6 +3,6 @@
 # re-clones everything below at its pin (the resurrection path).
 # name  url  @ sha  [cid=…]
 
-cron  https://github.com/clawdbotatg/claude-p-cron.git  @ 849a195d9723622b7c3bdeb03828aabbff4adb7c
+cron  https://github.com/clawdbotatg/claude-p-cron.git  @ 4368e8c9f67bf3b8ad783419c968650f62f1636b
 router  https://github.com/clawdbotatg/claude-p-router.git  @ edf582234e023867d411acd60cbca8445e5b93aa
-telegram  https://github.com/clawdbotatg/claude-p-telegram.git  @ 65ea9d23a44d975a24103e2fc29990df8b00d5e5
+telegram  https://github.com/clawdbotatg/claude-p-telegram.git  @ 24e7d76d9d07a9126f6488cb70f444c3d2e909cb
