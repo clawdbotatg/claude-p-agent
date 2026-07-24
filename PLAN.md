@@ -334,14 +334,22 @@ just work, no hand-holding (unit tests still exist underneath via
 
 ## 10. Order of work
 
-1. **Router extraction + the two engine hooks** — proves the contract in
-   one move; core shrinks ~145 lines.
-2. `modules.lock` + `tools/module` + the MODULE.md format.
-3. `skills/module`, `skills/self` extensions, `ARCHITECTURE.md` rewrite,
-   `tools/self status`, doc-drift check, guard hook.
-4. `cron` + `telegram` exemplars, topic tag, publish flow.
-5. The five acceptance conversations, then the resurrection drill.
-6. Trust layer: `attest` (EAS + trust list) and `ipfs` (bgipfs) modules.
+1. ✅ **Router extraction + the two engine hooks** (engine commit; router
+   published as clawdbotatg/claude-p-router, live-tested routing).
+2. ✅ `modules.lock` + `tools/module` + the MODULE.md format.
+3. ✅ `skills/module`, `skills/self` extensions, `ARCHITECTURE.md` rewrite,
+   `tools/self` status + drift (wired into verify), guard hook (live-tested:
+   an agent turn's edit to tools/verify was blocked and reported).
+4. ✅ `cron` + `telegram` exemplars published under the
+   `claude-p-agent-module` topic.
+5. ◐ Acceptance: resurrection drill PASSED (fresh GitHub clone +
+   `module sync` rebuilt all modules at pins; registry re-install of
+   telegram; smoke alive in the resurrected copy). The conversational
+   acceptance runs ("add telegram" end-to-end with a live bot, narrated
+   rollback) need a human present — token/verification steps.
+6. ✅ Trust layer v0: `attest` (EAS check against base.easscan.org +
+   trust.list; signs nothing by design — schema registration is a
+   documented human step) and `ipfs` (bgipfs wrapper) published.
 7. *(later)* CLAWD economics: bonds, challenges, council, bounties.
 
 ## Appendix A — decisions record (alternatives rejected, with reasons)
