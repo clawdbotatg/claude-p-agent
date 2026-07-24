@@ -1,0 +1,391 @@
+#!/usr/bin/env python3
+"""module — manage the agent's modules (thin, deterministic helpers).
+
+A module is a git repo cloned into modules/<name>/ (gitignored); the brain
+repo commits only modules.lock — `name  url  @ sha` — so one install, update,
+or removal is one lock commit and the brain repo alone can resurrect the
+whole body (`module sync`). The judgment parts — auditing the code, wiring
+per MODULE.md, verifying — are the agent's job (see skills/module); this tool
+only moves bytes and keeps the lock honest.
+
+  tools/module list                      what's installed vs locked
+  tools/module add SRC [NAME] [--sha X]  clone a module (URL, owner/repo, or name)
+  tools/module remove NAME               delete folder + lock line
+  tools/module update NAME [--sha X]     fetch + move pin (default: remote HEAD)
+  tools/module sync                      clone anything locked but missing (resurrection)
+  tools/module scaffold NAME             start a new module from the template
+  tools/module publish NAME [OWNER/REPO] push to GitHub + topic tag + pin in lock
+
+Env: GH_OWNER (default clawdbotatg) resolves bare names and owns published
+repos; CLAUDE_P_MODULES overrides the modules dir; MODULE_TOPIC overrides the
+registry topic (default claude-p-agent-module).
+"""
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODULES_DIR = os.path.abspath(os.path.expanduser(
+    os.environ.get("CLAUDE_P_MODULES") or os.path.join(HERE, "modules")))
+LOCK = os.path.join(HERE, "modules.lock")
+GH_OWNER = os.environ.get("GH_OWNER", "clawdbotatg")
+TOPIC = os.environ.get("MODULE_TOPIC", "claude-p-agent-module")
+REPO_PREFIX = "claude-p-"
+
+
+def die(msg, code=1):
+    print(f"module: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def run(cmd, cwd=None, capture=False):
+    r = subprocess.run(cmd, cwd=cwd, capture_output=capture, text=True)
+    if capture:
+        return r.returncode, (r.stdout or "").strip(), (r.stderr or "").strip()
+    return r.returncode
+
+
+def git_out(args, cwd):
+    code, out, _err = run(["git"] + args, cwd=cwd, capture=True)
+    return out if code == 0 else None
+
+
+# ── lock file ────────────────────────────────────────────────────────────────
+
+def read_lock():
+    """modules.lock → ordered {name: {"url":…, "sha":…, "cid":…}}."""
+    entries = {}
+    try:
+        with open(LOCK, encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return entries
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [p for p in line.split() if p != "@"]
+        if len(parts) < 3:
+            continue
+        name, url, sha = parts[0], parts[1], parts[2]
+        cid = next((p[4:] for p in parts[3:] if p.startswith("cid=")), None)
+        entries[name] = {"url": url, "sha": sha, "cid": cid}
+    return entries
+
+
+def write_lock(entries):
+    lines = [
+        "# modules.lock — the agent's installed modules, pinned by commit.",
+        "# One install/update/removal = one commit here. `tools/module sync`",
+        "# re-clones everything below at its pin (the resurrection path).",
+        "# name  url  @ sha  [cid=…]",
+        "",
+    ]
+    for name in sorted(entries):
+        e = entries[name]
+        row = f"{name}  {e['url']}  @ {e['sha']}"
+        if e.get("cid"):
+            row += f"  cid={e['cid']}"
+        lines.append(row)
+    with open(LOCK, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+def normalize_src(src):
+    """URL / local path / owner/repo / bare name → clonable URL."""
+    if re.match(r"^(https?://|git@|ssh://)", src) or os.path.isdir(src):
+        return src
+    if re.match(r"^[\w.-]+/[\w.-]+$", src):
+        return f"https://github.com/{src}.git"
+    if re.match(r"^[\w.-]+$", src):
+        return f"https://github.com/{GH_OWNER}/{src}.git"
+    die(f"can't make sense of source {src!r}")
+
+
+def default_name(src):
+    base = os.path.basename(src.rstrip("/"))
+    base = re.sub(r"\.git$", "", base)
+    if base.startswith(REPO_PREFIX):
+        base = base[len(REPO_PREFIX):]
+    return base
+
+
+def module_path(name):
+    if not re.match(r"^[\w.-]+$", name) or name.startswith("."):
+        die(f"bad module name {name!r}")
+    return os.path.join(MODULES_DIR, name)
+
+
+def is_own_repo(path):
+    """True only if `path` is itself a git repo (not swallowed by a parent —
+    modules/ is inside the brain repo, so a bare folder would otherwise
+    resolve to the BRAIN's HEAD)."""
+    top = git_out(["rev-parse", "--show-toplevel"], cwd=path)
+    return bool(top) and os.path.realpath(top) == os.path.realpath(path)
+
+
+def head_sha(path):
+    if not is_own_repo(path):
+        return None
+    return git_out(["rev-parse", "HEAD"], cwd=path)
+
+
+def is_dirty(path):
+    if not is_own_repo(path):
+        return False
+    out = git_out(["status", "--porcelain"], cwd=path)
+    return bool(out)
+
+
+def flag_value(args, flag):
+    if flag in args:
+        i = args.index(flag)
+        if i + 1 >= len(args):
+            die(f"{flag} needs a value")
+        val = args[i + 1]
+        rest = args[:i] + args[i + 2:]
+        return val, rest
+    return None, args
+
+
+# ── verbs ────────────────────────────────────────────────────────────────────
+
+def cmd_list(_args):
+    lock = read_lock()
+    names = sorted(set(lock) | {
+        d for d in (os.listdir(MODULES_DIR) if os.path.isdir(MODULES_DIR) else [])
+        if os.path.isdir(os.path.join(MODULES_DIR, d)) and not d.startswith(".")
+    })
+    if not names:
+        print("module: none installed (see skills/module to add one)")
+        return
+    for name in names:
+        path = os.path.join(MODULES_DIR, name)
+        locked = lock.get(name)
+        if not os.path.isdir(path):
+            print(f"  {name:<12} MISSING locally — run: tools/module sync")
+            continue
+        sha = head_sha(path)
+        state = []
+        if sha is None:
+            state.append("no git repo (scaffold/publish to fix)")
+        if not locked:
+            state.append("UNLOCKED (not in modules.lock)")
+        elif sha and not sha.startswith(locked["sha"]) and locked["sha"] != sha:
+            state.append(f"drifted (locked {locked['sha'][:9]})")
+        if is_dirty(path):
+            state.append("dirty")
+        mark = "  ".join(state) or "ok"
+        print(f"  {name:<12} {(sha or '?')[:9]}  {mark}"
+              + (f"  {locked['url']}" if locked else ""))
+
+
+def cmd_add(args):
+    sha, args = flag_value(args, "--sha")
+    if not args:
+        die("usage: module add SRC [NAME] [--sha X]")
+    src = normalize_src(args[0])
+    name = args[1] if len(args) > 1 else default_name(args[0])
+    path = module_path(name)
+    if os.path.exists(path):
+        die(f"modules/{name} already exists (module update {name}?)")
+    os.makedirs(MODULES_DIR, exist_ok=True)
+    if run(["git", "clone", src, path]) != 0:
+        die(f"clone failed: {src}")
+    if sha and run(["git", "checkout", "--quiet", sha], cwd=path) != 0:
+        shutil.rmtree(path, ignore_errors=True)
+        die(f"pin {sha} not found in {src}")
+    got = head_sha(path)
+    if not got:
+        shutil.rmtree(path, ignore_errors=True)
+        die("clone has no HEAD?")
+    lock = read_lock()
+    lock[name] = {"url": src if not os.path.isdir(src) else src, "sha": got,
+                  "cid": None}
+    write_lock(lock)
+    print(f"module: added {name} @ {got[:9]} — lock updated")
+    manifest = os.path.join(path, "MODULE.md")
+    if os.path.isfile(manifest):
+        print(f"module: now READ {manifest} and wire it (see skills/module)")
+    else:
+        print("module: WARNING — no MODULE.md; audit extra carefully")
+
+
+def cmd_remove(args):
+    if not args:
+        die("usage: module remove NAME")
+    name = args[0]
+    path = module_path(name)
+    lock = read_lock()
+    existed = False
+    if os.path.isdir(path):
+        shutil.rmtree(path)
+        existed = True
+    if name in lock:
+        del lock[name]
+        write_lock(lock)
+        existed = True
+    if not existed:
+        die(f"no such module {name!r}")
+    print(f"module: removed {name} — remember to UNWIRE per its MODULE.md "
+          "(env vars, cron entries, processes) and commit the lock")
+
+
+def cmd_update(args):
+    sha, args = flag_value(args, "--sha")
+    if not args:
+        die("usage: module update NAME [--sha X]")
+    name = args[0]
+    path = module_path(name)
+    if not os.path.isdir(path):
+        die(f"modules/{name} not installed (module sync?)")
+    if is_dirty(path):
+        die(f"modules/{name} has local changes — commit or stash them first")
+    if run(["git", "fetch", "--quiet", "origin"], cwd=path) != 0:
+        die("fetch failed")
+    target = sha
+    if not target:
+        target = (git_out(["rev-parse", "origin/HEAD"], cwd=path)
+                  or git_out(["rev-parse", "origin/main"], cwd=path)
+                  or git_out(["rev-parse", "origin/master"], cwd=path))
+    if not target:
+        die("can't resolve a remote HEAD to update to")
+    if run(["git", "checkout", "--quiet", target], cwd=path) != 0:
+        die(f"checkout {target} failed")
+    got = head_sha(path)
+    lock = read_lock()
+    old = lock.get(name, {}).get("sha", "?")
+    url = lock.get(name, {}).get("url") or git_out(
+        ["remote", "get-url", "origin"], cwd=path) or "?"
+    lock[name] = {"url": url, "sha": got, "cid": lock.get(name, {}).get("cid")}
+    write_lock(lock)
+    print(f"module: {name} {old[:9]} → {got[:9]} — re-verify per MODULE.md, "
+          "then commit the lock")
+
+
+def cmd_sync(_args):
+    lock = read_lock()
+    if not lock:
+        print("module: lock is empty — nothing to sync")
+        return
+    os.makedirs(MODULES_DIR, exist_ok=True)
+    for name, e in lock.items():
+        path = os.path.join(MODULES_DIR, name)
+        if os.path.isdir(path):
+            sha = head_sha(path)
+            if sha and sha != e["sha"]:
+                print(f"module: {name} is at {sha[:9]}, lock says "
+                      f"{e['sha'][:9]} (module update {name} --sha {e['sha']} "
+                      "to converge)")
+            continue
+        print(f"module: cloning {name} from {e['url']}")
+        if run(["git", "clone", e["url"], path]) != 0:
+            print(f"module: FAILED to clone {name}", file=sys.stderr)
+            continue
+        if run(["git", "checkout", "--quiet", e["sha"]], cwd=path) != 0:
+            print(f"module: FAILED to pin {name} @ {e['sha'][:9]}",
+                  file=sys.stderr)
+            continue
+        print(f"module: {name} @ {e['sha'][:9]} — now wire it per its "
+              "MODULE.md (env vars, processes, cron)")
+    print("module: sync done")
+
+
+TEMPLATE = """# {name} — <one line: what this module does>
+
+## What it is
+
+<a paragraph. which attachment points it uses: tools/, skills/, an adapter
+process, an `env` hook, hooks.json>
+
+## What it needs
+
+<env vars (names only), dependencies (kept inside this folder), whether it
+runs a long-lived process and how it's supervised>
+
+## Wiring
+
+<exact steps the installing agent performs; "none" if convention covers it>
+
+## How to verify
+
+<a harmless live demo that proves it works, runnable right after install>
+
+## What can go wrong
+
+<the honest list — this section is REQUIRED and read aloud at install time>
+
+## How to uninstall
+
+<how to back out completely: files, env vars, processes, cron entries>
+"""
+
+
+def cmd_scaffold(args):
+    if not args:
+        die("usage: module scaffold NAME")
+    name = args[0]
+    path = module_path(name)
+    if os.path.exists(path):
+        die(f"modules/{name} already exists")
+    os.makedirs(path)
+    with open(os.path.join(path, "MODULE.md"), "w", encoding="utf-8") as f:
+        f.write(TEMPLATE.format(name=name))
+    if run(["git", "init", "--quiet"], cwd=path) != 0:
+        die("git init failed")
+    print(f"module: scaffolded modules/{name} — fill MODULE.md, add the "
+          f"pieces, commit inside it, then: tools/module publish {name}")
+
+
+def cmd_publish(args):
+    if not args:
+        die("usage: module publish NAME [OWNER/REPO]")
+    name = args[0]
+    path = module_path(name)
+    if not os.path.isdir(os.path.join(path, ".git")):
+        die(f"modules/{name} is not a git repo (scaffold first?)")
+    if not os.path.isfile(os.path.join(path, "MODULE.md")):
+        die("no MODULE.md — a module isn't publishable without its manifest")
+    if is_dirty(path):
+        die(f"modules/{name} has uncommitted changes — commit inside it first")
+    repo = args[1] if len(args) > 1 else f"{GH_OWNER}/{REPO_PREFIX}{name}"
+    url = f"https://github.com/{repo}.git"
+    if git_out(["remote", "get-url", "origin"], cwd=path) is None:
+        code, _out, err = run(
+            ["gh", "repo", "create", repo, "--public",
+             f"--source={path}", "--push"], capture=True)
+        if code != 0:
+            die(f"gh repo create failed: {err}")
+    else:
+        if run(["git", "push", "-u", "origin", "HEAD"], cwd=path) != 0:
+            die("push failed")
+    run(["gh", "repo", "edit", repo, "--add-topic", TOPIC], capture=True)
+    got = head_sha(path)
+    lock = read_lock()
+    lock[name] = {"url": url, "sha": got,
+                  "cid": lock.get(name, {}).get("cid")}
+    write_lock(lock)
+    print(f"module: published {repo} (topic {TOPIC}) @ {got[:9]} — lock "
+          "updated, commit it")
+
+
+VERBS = {
+    "list": cmd_list, "add": cmd_add, "remove": cmd_remove,
+    "update": cmd_update, "sync": cmd_sync, "scaffold": cmd_scaffold,
+    "publish": cmd_publish,
+}
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] not in VERBS:
+        print(__doc__.strip(), file=sys.stderr)
+        sys.exit(2)
+    VERBS[sys.argv[1]](sys.argv[2:])
+
+
+if __name__ == "__main__":
+    main()

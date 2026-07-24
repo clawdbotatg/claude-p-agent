@@ -32,5 +32,12 @@ __pycache__/
 # engine-owned conversation memory (session-id store)
 .memory/
 
+# modules — each is its own git repo, pinned by modules.lock (which IS tracked)
+/modules/
+
+# generated per-spawn from hooks.base.json + modules/*/hooks.json (see agent.py)
+.hooks.generated.json
+.mcp.generated.json
+
 # watchdog failure counter
 .watchdog-fails

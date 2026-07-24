@@ -1,0 +1,6 @@
+# modules.lock — the agent's installed modules, pinned by commit.
+# One install/update/removal = one commit here. `tools/module sync`
+# re-clones everything below at its pin (the resurrection path).
+# name  url  @ sha  [cid=…]
+
+router  https://github.com/clawdbotatg/claude-p-router.git  @ edf582234e023867d411acd60cbca8445e5b93aa

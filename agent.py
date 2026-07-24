@@ -76,152 +76,120 @@ def _child_env(auto_memory=True):
     env = scrubbed_env()
     if not auto_memory:
         env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
-    _route_subscription(env)
+    _apply_module_env(env)
     return env
 
 
-# ── subscription router (built in, on by default) ────────────────────────────
-# If this box holds multiple Claude subscription logins — one config dir per
-# plan under ~/.clawd-accounts/<name>, each signed in ONCE via
-#   CLAUDE_CONFIG_DIR=~/.clawd-accounts/<name> claude /login
-# (the clawd-harness accounts page manages these) — then every turn runs on
-# the plan with the MOST HEADROOM right now. Usage comes from Claude's OAuth
-# usage endpoint (undocumented: every failure degrades to "don't route"),
-# cached for CLAUDE_P_ROUTER_TTL seconds. The plain ~/.claude login
-# participates as `default`. An operator-set CLAUDE_CONFIG_DIR always wins
-# (explicit pin > router). Boxes with no account dirs behave exactly as
-# before. Disable with CLAUDE_P_ROUTER=0.
-ROUTER_ON = os.environ.get("CLAUDE_P_ROUTER", "1") != "0"
-ROUTER_TTL = float(os.environ.get("CLAUDE_P_ROUTER_TTL", "600"))
-ACCOUNTS_DIR = os.path.expanduser(
-    os.environ.get("CLAWD_ACCOUNTS_DIR", "~/.clawd-accounts"))
-OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"  # Claude Code's public id
-OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
-OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
-OAUTH_BETA = "oauth-2025-04-20"
-_usage_cache = {}                  # account name -> {"pct": float, "ts": float}
-_route_state = {"name": None}
+# ── modules (the engine's only extension points) ─────────────────────────────
+# A module is a folder under modules/ — its own git repo, pinned in
+# modules.lock (see tools/module). The engine NEVER imports module code; it
+# honors exactly two declarative attachment points, both failure-tolerant:
+#
+#   1. env hook — an executable `modules/<name>/env` runs before every spawn
+#      (cwd = its module dir, child env passed through); each "KEY=VAL" line
+#      of its stdout merges into the child env, "KEY=" (empty) removes the
+#      key. Non-zero exit, timeout, or garbage lines are ignored; stderr
+#      passes through (modules report state changes there). The subscription
+#      router lives here now: modules/router/env.
+#
+#   2. settings merge — `modules/<name>/hooks.json` declares Claude Code
+#      native hooks (UserPromptSubmit / PreToolUse / PostToolUse / Stop …)
+#      and/or "mcpServers" (stateful tool servers). hooks.base.json in the
+#      repo root (tracked — the guard hook lives there) merges first, then
+#      each module's file; the result is written to generated files passed
+#      via --settings / --mcp-config. The token $MODULE_DIR (module files)
+#      or $AGENT_HOME (base file) is replaced with the absolute dir, so
+#      hook commands can call scripts they ship.
+#
+# Everything else a module does (tools/, skills/, adapter processes) needs
+# no engine involvement at all. See skills/module/SKILL.md.
+MODULES_DIR = os.path.abspath(os.path.expanduser(
+    os.environ.get("CLAUDE_P_MODULES") or os.path.join(AGENT_DIR, "modules")))
+ENV_HOOK_TIMEOUT = float(os.environ.get("CLAUDE_P_ENV_HOOK_TIMEOUT", "60"))
 
 
-def _keychain_service(config_dir):
-    """Claude Code's own Keychain item derivation (macOS)."""
-    if not config_dir:
-        return "Claude Code-credentials"
-    import hashlib, unicodedata
-    nfc = unicodedata.normalize("NFC", config_dir)
-    return "Claude Code-credentials-" + hashlib.sha256(nfc.encode()).hexdigest()[:8]
-
-
-def _read_creds(config_dir):
+def _module_dirs():
     try:
-        r = subprocess.run(["security", "find-generic-password",
-                            "-s", _keychain_service(config_dir),
-                            "-a", os.environ.get("USER", ""), "-w"],
-                           capture_output=True, text=True, timeout=10)
-        if r.returncode == 0 and r.stdout.strip():
-            return json.loads(r.stdout.strip())
-    except Exception:
-        pass
-    path = os.path.join(config_dir or os.path.expanduser("~/.claude"),
-                        ".credentials.json")
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return None
-
-
-def _usage_pct(config_dir):
-    """% used of the most-constrained window for one login, or None."""
-    import urllib.request, urllib.error
-    oauth = (_read_creds(config_dir) or {}).get("claudeAiOauth") or {}
-    access, refresh = oauth.get("accessToken"), oauth.get("refreshToken")
-    if not access:
-        return None
-
-    def call(tok):
-        req = urllib.request.Request(OAUTH_USAGE_URL, headers={
-            "Authorization": f"Bearer {tok}", "anthropic-beta": OAUTH_BETA})
-        try:
-            with urllib.request.urlopen(req, timeout=10) as r:
-                return r.status, json.loads(r.read().decode())
-        except urllib.error.HTTPError as e:
-            return e.code, None
-        except Exception:
-            return None, None
-
-    code, usage = call(access)
-    if code == 401 and refresh:
-        req = urllib.request.Request(
-            OAUTH_TOKEN_URL, method="POST",
-            headers={"Content-Type": "application/json"},
-            data=json.dumps({"grant_type": "refresh_token",
-                             "refresh_token": refresh,
-                             "client_id": OAUTH_CLIENT_ID}).encode())
-        try:
-            with urllib.request.urlopen(req, timeout=10) as r:
-                fresh = json.loads(r.read().decode()).get("access_token")
-        except Exception:
-            fresh = None
-        if fresh:
-            code, usage = call(fresh)
-    if code != 200 or not isinstance(usage, dict):
-        return None
-    worst = None
-    for key in ("five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet"):
-        w = usage.get(key)
-        u = w.get("utilization") if isinstance(w, dict) else w
-        if isinstance(u, (int, float)):
-            worst = u if worst is None else max(worst, u)
-    return worst
-
-
-def _route_subscription(env):
-    """Point the child at the plan with the most headroom (see block comment)."""
-    if not ROUTER_ON or os.environ.get("CLAUDE_CONFIG_DIR"):
-        return                                   # off, or operator pinned a dir
-    candidates = [("default", "")]
-    try:
-        candidates += sorted(
-            (d.name, os.path.join(ACCOUNTS_DIR, d.name))
-            for d in os.scandir(ACCOUNTS_DIR) if d.is_dir())
+        return sorted(
+            (d.name, d.path)
+            for d in os.scandir(MODULES_DIR)
+            if d.is_dir() and not d.name.startswith(".")
+        )
     except OSError:
-        pass
-    if len(candidates) < 2:
-        return                                   # nothing to route between
-    import time as _t
-    now = _t.time()
-    best_name, best_cfg, best_pct = None, None, None
-    for name, cfg in candidates:
-        c = _usage_cache.get(name)
-        if not c or now - c["ts"] > ROUTER_TTL:
-            pct = _usage_pct(cfg)
-            if pct is None:
-                _usage_cache.pop(name, None)
-                continue                         # not signed in / endpoint down
-            c = {"pct": pct, "ts": now}
-            _usage_cache[name] = c
-        if best_pct is None or c["pct"] < best_pct:
-            best_name, best_cfg, best_pct = name, cfg, c["pct"]
-    if best_name is None:
-        return
-    if best_cfg:
-        # share the transcript store so sessions resume under any plan
-        src = os.path.expanduser("~/.claude/projects")
-        dst = os.path.join(best_cfg, "projects")
+        return []
+
+
+def _apply_module_env(env):
+    """Run every modules/*/env hook; merge KEY=VAL stdout lines into env."""
+    for _name, path in _module_dirs():
+        hook = os.path.join(path, "env")
+        if not (os.path.isfile(hook) and os.access(hook, os.X_OK)):
+            continue
         try:
-            os.makedirs(src, exist_ok=True)
-            if not os.path.lexists(dst):
-                os.symlink(src, dst)
+            r = subprocess.run([hook], capture_output=True, text=True,
+                               timeout=ENV_HOOK_TIMEOUT, env=env, cwd=path)
+        except Exception:
+            continue
+        if r.stderr.strip():
+            print(r.stderr.rstrip(), file=sys.stderr, flush=True)
+        if r.returncode != 0:
+            continue
+        for line in r.stdout.splitlines():
+            key, sep, val = line.partition("=")
+            key = key.strip()
+            if not sep or not key or not key.replace("_", "").isalnum():
+                continue
+            if val.strip():
+                env[key] = val.strip()
+            else:
+                env.pop(key, None)
+
+
+def _merged_module_settings():
+    """Collect hooks.base.json + modules/*/hooks.json → (hooks, mcp_servers)."""
+    hooks, mcp = {}, {}
+
+    def eat(path, token, root):
+        try:
+            with open(path, encoding="utf-8") as f:
+                raw = f.read()
         except OSError:
-            pass
-        env["CLAUDE_CONFIG_DIR"] = best_cfg
-    else:
-        env.pop("CLAUDE_CONFIG_DIR", None)
-    if best_name != _route_state["name"]:
-        _route_state["name"] = best_name
-        print(f"[router] turns run on plan {best_name!r} ({best_pct:.0f}% used)",
-              file=sys.stderr, flush=True)
+            return
+        try:
+            decl = json.loads(raw.replace(token, root))
+        except ValueError:
+            print(f"[modules] bad json ignored: {path}", file=sys.stderr)
+            return
+        for event, matchers in (decl.get("hooks") or {}).items():
+            if isinstance(matchers, list):
+                hooks.setdefault(event, []).extend(matchers)
+        if isinstance(decl.get("mcpServers"), dict):
+            mcp.update(decl["mcpServers"])
+
+    eat(os.path.join(agent_home(), "hooks.base.json"), "$AGENT_HOME", agent_home())
+    for _name, path in _module_dirs():
+        eat(os.path.join(path, "hooks.json"), "$MODULE_DIR", path)
+    return hooks, mcp
+
+
+def _module_settings_flags():
+    """Write merged declarations to generated files → CLI flags (or [])."""
+    hooks, mcp = _merged_module_settings()
+    flags = []
+    try:
+        if hooks:
+            p = os.path.join(agent_home(), ".hooks.generated.json")
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump({"hooks": hooks}, f, indent=1)
+            flags += ["--settings", p]
+        if mcp:
+            p = os.path.join(agent_home(), ".mcp.generated.json")
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump({"mcpServers": mcp}, f, indent=1)
+            flags += ["--mcp-config", p]
+    except OSError:
+        return []
+    return flags
 
 
 def read_prompt(path):
@@ -250,6 +218,7 @@ def _build_flags(
         flags += ["--add-dir", os.path.expanduser(d)]
     for d in filter(None, os.environ.get("BRAIN_DIRS", "").split(":")):
         flags += ["--add-dir", os.path.expanduser(d)]
+    flags += _module_settings_flags()
     flags += _base_extra_args()
     if extra_args:
         flags += list(extra_args)
