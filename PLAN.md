@@ -81,7 +81,37 @@ docs ARE the capability:
      `remember="tg-<chat_id>"`; allowlist + CLI locks for strangers;
      declares its process-supervision needs in MODULE.md
 
-## 5. Prove it (acceptance = conversations, not tests)
+## 5. Trust layer — EAS attestations on module SHAs (later, pure add-on)
+
+Git commit SHAs are already content addresses — `modules.lock` pins them, so
+the trust layer attaches to what exists, changing nothing underneath.
+
+- **Attestation = an EAS attestation** (Ethereum Attestation Service, on
+  Base) over `{repo_url, commit_sha, module_name, verdict, notes}`, signed
+  by a known key. Third-party "I audited this exact SHA and vouch" — the
+  thing git author-signing can't express. (Author-signed commits are still
+  required hygiene for published modules; they prove authorship, not safety.)
+- **Web of trust, not global scores** — each operator keeps a trust list of
+  attester keys. No staking, no reputation math, no sybil swamp. The install
+  skill grows one sentence: "check attestations for the pinned SHA; for
+  modules touching money/credentials, require one from the trust list."
+- **Agents are auditors** — the install flow already reads the code; give
+  the agent a key and it publishes its own attestation after a successful
+  audit + install. Reputation emerges from usage.
+- **Attestations never replace the audit.** Signed malware is an ancient
+  tradition; the agent reads the code regardless.
+- **Availability mirror = bgipfs** (BuidlGuidl IPFS: `npm i -g bgipfs`,
+  `bgipfs upload <path>` → CID, gateway at
+  `https://{CID}.ipfs.community.bgipfs.com/`, `X-API-Key` auth —
+  https://www.bgipfs.com/SKILL.md). Optional, not a dependency: attesters'
+  clones already satisfy the pinned SHA if GitHub drops a repo; publishing
+  a module tarball to bgipfs adds a URL-stable mirror for popular modules.
+  `modules.lock` may carry an optional CID column.
+- Ships as a module itself (naturally): `<name>-attest` wrapping EAS with
+  `attest <repo> <sha>` / `check <repo> <sha>` + the trust list, and
+  bgipfs upload for the mirror step.
+
+## 6. Prove it (acceptance = conversations, not tests)
 
 - "add telegram" → working bot, one lock commit, live round-trip shown.
 - "roll back to before the memory module" → narrated, clean, done.
@@ -98,3 +128,4 @@ docs ARE the capability:
 3. `skills/module` + `skills/self` + `ARCHITECTURE.md` rewrites
 4. cron + telegram exemplars, topic tag, publish flow
 5. The five acceptance conversations, then the resurrection drill
+6. Trust layer last: the `attest` module (EAS + trust list + bgipfs mirror)
