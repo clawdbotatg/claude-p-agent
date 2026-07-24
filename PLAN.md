@@ -107,9 +107,20 @@ the trust layer attaches to what exists, changing nothing underneath.
   clones already satisfy the pinned SHA if GitHub drops a repo; publishing
   a module tarball to bgipfs adds a URL-stable mirror for popular modules.
   `modules.lock` may carry an optional CID column.
-- Ships as a module itself (naturally): `<name>-attest` wrapping EAS with
+- Ships as **two modules** (naturally): `<name>-attest` wrapping EAS with
   `attest <repo> <sha>` / `check <repo> <sha>` + the trust list, and
-  bgipfs upload for the mirror step.
+  `<name>-ipfs` wrapping bgipfs for the mirror step.
+
+**Later — CLAWD economics (designed, deferred):** bonded attestations
+(stake CLAWD behind a vouch; slashable only for *intentional malice present
+in the attested SHA*, never honest bugs), optimistic challenges with
+commit-reveal evidence and a named council oracle (5-of-9; can rule, never
+initiate), challenger bounty + burn split, module-creation bounties, and
+stake-as-ranking (sort signal only — never an install gate). All of it
+attaches to the same `(repo, sha)` attestations above; nothing in the
+engine, lock file, or install flow changes when it arrives. Slash/challenge
+events double as a broadcast immune system: agents watch flags on their own
+`modules.lock` SHAs and auto-quarantine + roll back.
 
 ## 6. Prove it (acceptance = conversations, not tests)
 
@@ -128,4 +139,6 @@ the trust layer attaches to what exists, changing nothing underneath.
 3. `skills/module` + `skills/self` + `ARCHITECTURE.md` rewrites
 4. cron + telegram exemplars, topic tag, publish flow
 5. The five acceptance conversations, then the resurrection drill
-6. Trust layer last: the `attest` module (EAS + trust list + bgipfs mirror)
+6. Trust layer: the `attest` module (EAS + trust list) and the `ipfs`
+   module (bgipfs mirror)
+7. (later) CLAWD economics on top — bonds, challenges, bounties
