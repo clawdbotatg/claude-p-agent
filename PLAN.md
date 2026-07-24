@@ -68,10 +68,32 @@ docs ARE the capability:
   - "When did this break?" → `git bisect run tools/verify`.
   - Module rollback = revert one lock commit + checkout old SHA in the
     module's own repo. Brain history untouched.
+- **`tools/self status`** — ground truth from disk, never prose: current
+  SHA + nearest checkpoint tag, installed modules + pinned SHAs, active
+  hooks, clean/dirty worktree, last smoke result. "What am I right now"
+  is answered by inspection.
+- **Doc-drift check** — a verify step (+ periodic cron job) cross-checking
+  the docs' factual claims against the code: referenced files exist,
+  documented hooks are wired, module list matches the lock. A confident
+  wrong self-image causes confident wrong edits; docs must not drift
+  silently.
+- **Periodic self-exam** — cheap cron: the agent answers questions about
+  itself from files ("what modules run? how do you roll back? what changed
+  this week?") and flags what it can't answer. Failing the quiz = the docs
+  failed, not the agent.
+- **Guard hook on the brakes** — a PreToolUse hook blocks Write/Edit on the
+  safety-critical set (`tools/watchdog`, `tools/verify`, `tools/smoke`,
+  `skills/self/`, the guard's own config) unless the human explicitly
+  confirms that change. The watchdog can't heal a watchdog edited into
+  brokenness — so editing the recovery system is mechanically gated, not
+  persona-promised. Enforced via the same settings merge modules use.
 - Recovery ladder unchanged (each layer assumes the one above is dead):
   `git revert` → `tools/smoke` → `tools/watchdog` resets to `known-good`
   (dumb shell, no AI) → resurrect anywhere from brain repo + `modules.lock`
-  + the external persona backup.
+  + the external persona backup. Principle: self-awareness must be
+  verifiable, and self-protection must not depend on the self — the
+  last-resort layers are dumb because the failure they exist for is "the
+  intelligence is compromised."
 
 ## 4. The registry
 
