@@ -15,11 +15,20 @@ identity, and undo button.
 - Exactly **two** extension points in the engine, both dumb and declarative:
   1. **env hook** — any executable `modules/*/env` runs before spawn; its
      `KEY=VAL` stdout merges into the child env; failures ignored (~10 lines).
-  2. **hooks merge** — `modules/*/hooks.json` (Claude Code native hooks:
-     UserPromptSubmit / PreToolUse / PostToolUse / Stop) merged into one
-     generated settings file passed via `--settings` (~20 lines).
+  2. **settings merge** — `modules/*/hooks.json` (Claude Code native hooks:
+     UserPromptSubmit / PreToolUse / PostToolUse / Stop) **and MCP server
+     declarations** (for stateful tool servers — persistent browser, DB
+     pools, vector stores) merged into one generated settings file passed
+     via `--settings` (~20 lines). Same merge, both kinds of declaration.
 - The engine **never imports module code**. A broken module loses one
   capability; the mind always spawns.
+- **Boundary notes (audited, deliberate):** global *reply* transforms have
+  no attachment point (adapters own output) — if ever truly needed, the
+  answer is a third hook of the identical dumb pattern (`modules/*/reply`,
+  stdin→stdout), deferred until demanded. A different loop or backend
+  (Codex, custom planners) = fork the engine, keep the conventions — the
+  thesis is that Claude Code *is* the loop. Module-on-module deps are prose
+  in MODULE.md, resolved by the agent-as-installer, not a solver.
 
 ## 2. The module contract
 
