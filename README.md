@@ -102,17 +102,34 @@ the whole session yourself is a rare exception, not the norm. If you're unsure: 
 
 | Piece | What it is |
 |---|---|
-| **`agent.py`** | spawn `claude -p`, scrub env, return reply |
-| **`tui.sh` / `adapters/cli.py`** | terminal REPL (remembers by default; `--remember <key>` to pick a conversation) |
+| **`agent.py`** | spawn `claude -p`, scrub env, return reply — plus the two module extension points |
+| **`tui.sh` / `adapters/cli.py`** | terminal REPL (`--remember <key>` to pick a conversation) |
 | **`adapters/run.py`** | general non-interactive runner — own `--cwd`/`--tool`/`--remember <key>`, for shell/Node/cron callers |
 | **`CLAUDE.md.example`** | persona template (real `CLAUDE.md` is gitignored) |
-| **`tools/verify`** | compile + test before you say "done" |
+| **`modules.lock`** | the agent's installed modules, pinned by commit (`tools/module sync` rebuilds them) |
+| **`tools/module`** | list/add/remove/update/sync/scaffold/publish modules |
+| **`tools/self`** | status (what am I right now, from disk) + doc-drift check |
+| **`tools/verify`** | compile + tests + doc-drift before you say "done" |
 | **`tools/smoke`** | one live turn, exit code — is the agent alive? |
-| **`tools/checkpoint`** | certify a green HEAD as `known-good` + back up the persona |
+| **`tools/checkpoint`** | certify a green HEAD as `known-good` (+ named `checkpoint/…` tags) + back up the persona |
 | **`tools/watchdog`** | dumb cron healer — resets to `known-good` when verify keeps failing |
+| **`tools/guard-check`** | hook that stops the agent editing its own recovery system |
 | **`tools/local/`** | gitignored slot for your private tools |
+| **`skills/module/`** | the agent as package manager — install, build, publish modules |
 | **`skills/extend/`** | how to grow the agent |
 | **`skills/self/`** | how the agent changes itself without breaking itself |
+
+## Modules
+
+**A capability is a module: a git repo cloned into `modules/<name>/`, pinned
+in `modules.lock`, described by its `MODULE.md`.** The agent itself installs,
+audits, wires, and verifies them (see `skills/module`) — there is no loader
+and no plugin API; the engine only honors an `env` hook and a `hooks.json`
+per module. Find published modules by GitHub topic
+[`claude-p-agent-module`](https://github.com/topics/claude-p-agent-module);
+publish yours with `tools/module publish`. First one:
+[claude-p-router](https://github.com/clawdbotatg/claude-p-router) routes
+every turn to the subscription login with the most headroom.
 
 ## Make it yours
 

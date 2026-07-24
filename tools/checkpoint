@@ -43,6 +43,19 @@ if not run([sys.executable, os.path.join(HERE, "tools", "smoke")]):
 if not run(["git", "tag", "-f", "known-good"]):
     die("could not move known-good tag")
 
+# optional label → a NAMED checkpoint that never moves: a rollback target you
+# can talk about ("roll back to before-telegram"), alongside the moving
+# known-good. Usage: tools/checkpoint [label]
+if len(sys.argv) > 1:
+    import re
+    import time
+    label = re.sub(r"[^A-Za-z0-9._-]+", "-", sys.argv[1]).strip("-")
+    if label:
+        tag = f"checkpoint/{time.strftime('%Y-%m-%d')}-{label}"
+        if not run(["git", "tag", "-f", tag]):
+            die(f"could not create {tag}")
+        print(f"checkpoint: named tag {tag}")
+
 dest = os.path.join(BACKUP, os.path.basename(HERE))
 os.makedirs(dest, exist_ok=True)
 for name in ("CLAUDE.md", ".env"):

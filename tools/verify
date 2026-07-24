@@ -63,6 +63,15 @@ def main():
     else:
         print("verify: no tests/ dir (compile-only)")
 
+    # doc-drift: docs that lie about the code cause confident wrong edits.
+    # Drift failures are tracked-file problems, so the watchdog's reset to
+    # known-good genuinely fixes them (tools/self only WARNs on untracked state).
+    drift = os.path.join(HERE, "tools", "self")
+    if os.path.isfile(drift):
+        r = subprocess.run([sys.executable, drift, "drift"], cwd=HERE)
+        if r.returncode != 0:
+            die("doc drift", r.returncode)
+
     print("verify: ok")
 
 

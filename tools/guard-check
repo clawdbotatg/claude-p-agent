@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""guard-check — PreToolUse hook: the agent may not edit its own brakes.
+
+Wired via hooks.base.json (merged into every spawn's --settings by agent.py).
+Claude Code pipes the tool call as JSON on stdin; exit 2 blocks the call and
+feeds stderr back to the model. Blocks Write/Edit/NotebookEdit against the
+safety-critical set below — the recovery system must not be editable by the
+thing it exists to recover (a watchdog edited into brokenness can't heal a
+watchdog).
+
+Human override: `touch .guard-ok` in the agent home authorizes edits for
+GUARD_OK_TTL seconds (default 900). The human runs that, not the agent —
+an agent touching its own .guard-ok is exactly the move this exists to stop,
+and it's visible in the transcript if it tries.
+
+No JSON on stdin / unparseable / no file path → allow (exit 0): this hook
+must never break normal operation. It gates the protected set only.
+"""
+import json
+import os
+import sys
+import time
+
+HOME = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TTL = float(os.environ.get("GUARD_OK_TTL", "900"))
+
+PROTECTED = [
+    "tools/watchdog",
+    "tools/verify",
+    "tools/smoke",
+    "tools/guard-check",
+    "hooks.base.json",
+    "skills/self",          # directory: everything under it
+]
+
+
+def is_protected(path):
+    real = os.path.realpath(path)
+    for rel in PROTECTED:
+        p = os.path.realpath(os.path.join(HOME, rel))
+        if real == p or real.startswith(p + os.sep):
+            return rel
+    return None
+
+
+def override_active():
+    try:
+        age = time.time() - os.stat(os.path.join(HOME, ".guard-ok")).st_mtime
+        return 0 <= age <= TTL
+    except OSError:
+        return False
+
+
+def main():
+    try:
+        payload = json.load(sys.stdin)
+    except Exception:
+        return 0
+    tin = payload.get("tool_input") or {}
+    path = tin.get("file_path") or tin.get("notebook_path")
+    if not path:
+        return 0
+    hit = is_protected(path)
+    if not hit:
+        return 0
+    if override_active():
+        print(f"guard: override active — edit to protected {hit} allowed",
+              file=sys.stderr)
+        return 0
+    print(
+        f"guard: BLOCKED — {hit} is part of the recovery system and is not "
+        "self-editable. If this change is genuinely wanted, ask the human to "
+        f"authorize it by running:  touch {os.path.join(HOME, '.guard-ok')}  "
+        f"(valid {int(TTL // 60)} minutes), then retry. See skills/self.",
+        file=sys.stderr,
+    )
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

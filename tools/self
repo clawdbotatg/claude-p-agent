@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""self — know thyself by inspection, never by recall.
+
+  tools/self            # status: what am I right now (ground truth from disk)
+  tools/self drift      # do my docs lie about my code? (also run by verify)
+
+status reads git, modules.lock, the hook merge, and the last smoke stamp —
+nothing here comes from memory or docs, so it can't be stale.
+
+drift cross-checks the docs' factual claims against the tree: every
+repo-path mentioned in backticks in the core docs must exist, and every hook
+command declared in hooks.base.json must exist and be executable. A confident
+wrong self-image causes confident wrong edits, so doc lies FAIL (exit 1) —
+and they're tracked files, so `git revert` (or the watchdog) always fixes
+them. Untracked state (modules/) only ever WARNs: it must never fail verify,
+or the watchdog would reset tracked files over an untracked problem.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+
+HOME = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, HOME)
+
+
+def git(*args):
+    r = subprocess.run(["git"] + list(args), cwd=HOME,
+                       capture_output=True, text=True)
+    return (r.stdout or "").strip() if r.returncode == 0 else None
+
+
+# ── status ───────────────────────────────────────────────────────────────────
+
+def cmd_status():
+    import agent
+
+    head = git("rev-parse", "--short", "HEAD") or "?"
+    branch = git("rev-parse", "--abbrev-ref", "HEAD") or "?"
+    dirty = git("status", "--porcelain") or ""
+    n_dirty = len([ln for ln in dirty.splitlines() if ln.strip()])
+    kg = git("rev-parse", "--short", "known-good")
+    print(f"self: {head} on {branch}"
+          + (f", {n_dirty} dirty file(s)" if n_dirty else ", clean")
+          + (f", known-good={kg}" if kg else ", NO known-good tag"))
+
+    tags = (git("tag", "-l", "checkpoint/*") or "").splitlines()
+    if tags:
+        print(f"self: checkpoints: {', '.join(tags[-3:])}"
+              + (f" (+{len(tags) - 3} older)" if len(tags) > 3 else ""))
+
+    try:
+        with open(os.path.join(HOME, ".smoke-last"), encoding="utf-8") as f:
+            print(f"self: last smoke: {f.read().strip()}")
+    except OSError:
+        print("self: last smoke: never recorded (run tools/smoke)")
+
+    print("self: modules:")
+    sys.stdout.flush()
+    subprocess.run([sys.executable, os.path.join(HOME, "tools", "module"),
+                    "list"], cwd=HOME)
+
+    hooks, mcp = agent._merged_module_settings()
+    if hooks:
+        parts = [f"{ev}×{len(ms)}" for ev, ms in sorted(hooks.items())]
+        print(f"self: hooks active: {', '.join(parts)}")
+    else:
+        print("self: hooks active: none")
+    if mcp:
+        print(f"self: mcp servers: {', '.join(sorted(mcp))}")
+    env_hooks = [n for n, p in agent._module_dirs()
+                 if os.access(os.path.join(p, "env"), os.X_OK)]
+    print(f"self: env hooks: {', '.join(env_hooks) or 'none'}")
+
+    persona = os.path.join(HOME, "CLAUDE.md")
+    print(f"self: persona: {'present' if os.path.isfile(persona) else 'MISSING (run ./tui.sh to bootstrap)'}")
+
+
+# ── drift ────────────────────────────────────────────────────────────────────
+
+CORE_DOCS = ["README.md", "ARCHITECTURE.md", "PLAN.md", "tools/README.md",
+             "adapters/README.md"]
+PATH_RE = re.compile(
+    r"`((?:tools|skills|adapters|tests|docs)/[A-Za-z0-9._/-]+"
+    r"|agent\.py|tui\.sh|modules\.lock|hooks\.base\.json"
+    r"|CLAUDE\.md\.example|ARCHITECTURE\.md|README\.md|PLAN\.md)`")
+
+
+def doc_files():
+    for rel in CORE_DOCS:
+        if os.path.isfile(os.path.join(HOME, rel)):
+            yield rel
+    skills = os.path.join(HOME, "skills")
+    if os.path.isdir(skills):
+        for dirpath, _dirs, files in os.walk(skills):
+            for f in files:
+                if f.endswith(".md"):
+                    yield os.path.relpath(os.path.join(dirpath, f), HOME)
+
+
+def cmd_drift():
+    fails, warns = [], []
+
+    # 1. every repo path the docs mention must exist (tracked-only ⇒ may fail)
+    for rel in doc_files():
+        with open(os.path.join(HOME, rel), encoding="utf-8") as f:
+            text = f.read()
+        for m in PATH_RE.finditer(text):
+            p = m.group(1).rstrip("/")
+            if p.startswith("tools/local/") and p != "tools/local/README.md":
+                continue                      # gitignored overlay
+            if "your" in p:
+                continue                      # placeholder idiom (adapters/yours.py)
+            if not os.path.exists(os.path.join(HOME, p)):
+                fails.append(f"{rel} references missing {p}")
+
+    # 2. hooks.base.json must parse; its commands must exist and be executable
+    base = os.path.join(HOME, "hooks.base.json")
+    if os.path.isfile(base):
+        try:
+            with open(base, encoding="utf-8") as f:
+                decl = json.loads(f.read().replace("$AGENT_HOME", HOME))
+            for _ev, matchers in (decl.get("hooks") or {}).items():
+                for m in matchers:
+                    for h in m.get("hooks", []):
+                        cmd = (h.get("command") or "").split()[0]
+                        if cmd and cmd.startswith(HOME) and not (
+                                os.path.isfile(cmd) and os.access(cmd, os.X_OK)):
+                            fails.append(
+                                f"hooks.base.json commands missing/¬exec: {cmd}")
+        except ValueError as e:
+            fails.append(f"hooks.base.json does not parse: {e}")
+
+    # 3. lock vs modules dir (untracked state ⇒ warn only, never fail)
+    import importlib.machinery
+    import importlib.util
+    loader = importlib.machinery.SourceFileLoader(
+        "modtool", os.path.join(HOME, "tools", "module"))
+    spec = importlib.util.spec_from_loader("modtool", loader)
+    modtool = importlib.util.module_from_spec(spec)
+    loader.exec_module(modtool)
+    lock = modtool.read_lock()
+    mdir = modtool.MODULES_DIR
+    present = {d for d in (os.listdir(mdir) if os.path.isdir(mdir) else [])
+               if os.path.isdir(os.path.join(mdir, d)) and not d.startswith(".")}
+    for name in lock:
+        if name not in present:
+            warns.append(f"locked module {name} missing locally (module sync)")
+    for name in present - set(lock):
+        warns.append(f"modules/{name} is not in modules.lock (unpinned)")
+    for name in present:
+        if not os.path.isfile(os.path.join(mdir, name, "MODULE.md")):
+            warns.append(f"modules/{name} has no MODULE.md")
+
+    fails = sorted(set(fails))
+    warns = sorted(set(warns))
+    for w in warns:
+        print(f"drift: warn — {w}")
+    if fails:
+        for x in fails:
+            print(f"drift: FAIL — {x}", file=sys.stderr)
+        print(f"drift: {len(fails)} doc lie(s) — fix the docs or the code",
+              file=sys.stderr)
+        return 1
+    print(f"drift: docs match the tree ({len(warns)} warning(s))")
+    return 0
+
+
+def main():
+    verb = sys.argv[1] if len(sys.argv) > 1 else "status"
+    if verb == "status":
+        cmd_status()
+        return 0
+    if verb == "drift":
+        return cmd_drift()
+    print(__doc__.strip(), file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -14,14 +14,27 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 from agent import run_turn  # noqa: E402
 
+def stamp(result):
+    """Record the outcome where tools/self status can read it."""
+    import time
+    try:
+        with open(os.path.join(HERE, ".smoke-last"), "w", encoding="utf-8") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + result)
+    except OSError:
+        pass
+
+
 try:
     reply = run_turn("Health check. Reply with exactly: SMOKE-OK", timeout=120)
 except Exception as e:
+    stamp(f"FAILED — {e}")
     print(f"smoke: FAILED — {e}", file=sys.stderr)
     sys.exit(1)
 
 if "SMOKE-OK" in (reply or ""):
+    stamp("alive")
     print("smoke: alive")
     sys.exit(0)
+stamp(f"FAILED — unexpected reply: {reply!r}")
 print(f"smoke: FAILED — unexpected reply: {reply!r}", file=sys.stderr)
 sys.exit(1)
