@@ -38,6 +38,9 @@ ap.add_argument("--forget", metavar="KEY", help="clear a conversation's memory a
 ap.add_argument("--no-auto-memory", action="store_true",
                 help="disable Claude Code's per-project auto-memory for this turn "
                      "(it persists user facts across ALL keys and stateless runs in a cwd)")
+ap.add_argument("--engine", metavar="NAME",
+                help="external engine (modules/NAME/engine) instead of claude — "
+                     "note --tool/--max-turns are claude-only and will be refused")
 a = ap.parse_args()
 
 if a.forget:
@@ -52,7 +55,8 @@ if a.max_turns:
 
 try:
     out = run_turn(prompt, cwd=a.cwd, extra_args=extra, remember=a.remember,
-                   timeout=a.timeout, auto_memory=not a.no_auto_memory)
+                   timeout=a.timeout, auto_memory=not a.no_auto_memory,
+                   engine=a.engine)
 except Exception as e:
     sys.stderr.write(f"run: {e}\n")
     sys.exit(1)
