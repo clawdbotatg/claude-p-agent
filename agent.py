@@ -19,6 +19,7 @@ Config via `.env` in the repo root (auto-loaded; real env wins):
   CLAUDE_BIN     path to claude CLI                   (default: "claude")
   CLAUDE_ARGS     extra CLI args every turn, shell-split
 """
+import glob
 import json
 import os
 import re
@@ -251,6 +252,10 @@ def _memory_root():
     ))
 
 
+def _safe_key(key):
+    return re.sub(r"[^A-Za-z0-9._-]", "_", str(key)).strip("._") or "default"
+
+
 def _memory_path(key):
     """A conversation key → the file holding its session id. A key that looks like a
     path (has a separator) is used as-is so a caller can pin the location; a plain
@@ -258,8 +263,7 @@ def _memory_path(key):
     key = str(key)
     if "/" in key or os.sep in key:
         return os.path.abspath(os.path.expanduser(key))
-    safe = re.sub(r"[^A-Za-z0-9._-]", "_", key).strip("._") or "default"
-    return os.path.join(_memory_root(), safe + ".session")
+    return os.path.join(_memory_root(), _safe_key(key) + ".session")
 
 
 def _read_session(path):
@@ -293,18 +297,152 @@ def _parse_json_result(raw):
 
 
 def forget(key):
-    """Clear one conversation's memory. Returns True if anything was removed."""
-    try:
-        os.remove(_memory_path(key))
-        return True
-    except OSError:
-        return False
+    """Clear one conversation's memory — the claude session id AND every
+    external engine's state blob for the key. Returns True if anything was removed."""
+    removed = False
+    for path in [_memory_path(key)] + _engine_state_paths(key):
+        try:
+            os.remove(path)
+            removed = True
+        except OSError:
+            pass
+    return removed
 
 
 def current_session(key):
     """The claude session id stored for a conversation key (or None) — read without
     running a turn. For callers that need to publish/inspect the live session id."""
     return _read_session(_memory_path(key)) if key else None
+
+
+# ── engines (protocol v0 — the contract is PLAN-ENGINES.md) ──────────────────
+# The BUILT-IN engine is claude (`claude -p`, everything above — recovery never
+# depends on the module system). An EXTERNAL engine is a module shipping an
+# executable `modules/<name>/engine`: one JSON request on stdin
+#   {"v":0,"text","system","state","agent_dir","options"}
+# (the engine must read stdin fully before writing), JSONL events on stdout,
+# and the LAST line {"type":"result","text":...,"state":...}. `state` is an
+# opaque engine-defined blob the kernel stores per conversation key, namespaced
+# per engine — threads never port across engines. Installing an engine never
+# activates it: selection is ENGINE=<name> in .env or run_turn(engine=...).
+# Claude-only options (extra_args, session_id, input_via) hard-error on
+# external engines — refused, never silently dropped.
+
+def _engine_state_path(key, name):
+    key = str(key)
+    if "/" in key or os.sep in key:
+        return os.path.abspath(os.path.expanduser(key)) + "." + name + ".state"
+    return os.path.join(_memory_root(), f"{_safe_key(key)}@{name}.state")
+
+
+def _engine_state_paths(key):
+    """Every external engine's stored state for a conversation key (forget)."""
+    key = str(key)
+    if "/" in key or os.sep in key:
+        pattern = os.path.abspath(os.path.expanduser(key)) + ".*.state"
+    else:
+        pattern = os.path.join(_memory_root(), _safe_key(key) + "@*.state")
+    return glob.glob(pattern)
+
+
+def _read_engine_state(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _persona_text():
+    """CLAUDE.md's text, for engines that can't auto-load it. (The canonical
+    persona file may someday rename to PERSONA.md — this is the only reader.)"""
+    try:
+        with open(os.path.join(AGENT_DIR, "CLAUDE.md"), encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def _run_engine_turn(name, text, *, append_system_prompt=None, cwd=None,
+                     add_dirs=None, on_event=None, return_meta=False,
+                     proc_holder=None, timeout=None, remember=None):
+    moddir = os.path.join(MODULES_DIR, name)
+    exe = os.path.join(moddir, "engine")
+    if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
+        raise RuntimeError(
+            f"engine '{name}' not installed — no executable modules/{name}/engine")
+
+    state_path = _engine_state_path(remember, name) if remember else None
+    request = {
+        "v": 0,
+        "text": text,
+        "system": "\n\n".join(
+            s for s in (_persona_text(), (append_system_prompt or "").strip()) if s),
+        "state": _read_engine_state(state_path) if state_path else None,
+        "agent_dir": os.path.abspath(cwd or AGENT_DIR),
+        "options": {"add_dirs": [os.path.expanduser(d) for d in add_dirs or []]},
+    }
+
+    proc = subprocess.Popen(
+        [exe], cwd=moddir, env=_child_env(), text=True, bufsize=1,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    if proc_holder is not None:
+        proc_holder["proc"] = proc
+    stderr_chunks = []
+    err_thread = threading.Thread(
+        target=lambda: stderr_chunks.extend(proc.stderr), daemon=True)
+    err_thread.start()
+
+    result = None
+    timer = threading.Timer(timeout, proc.kill) if timeout else None
+    if timer:
+        timer.start()
+    try:
+        proc.stdin.write(json.dumps(request))
+        proc.stdin.close()
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict) and event.get("type") == "result":
+                result = event
+            if on_event:
+                try:
+                    on_event(event)
+                except Exception:
+                    pass
+        proc.wait()
+    finally:
+        if timer:
+            timer.cancel()
+        err_thread.join(timeout=1)
+        for pipe in (proc.stdout, proc.stderr):
+            try:
+                pipe.close()
+            except OSError:
+                pass
+
+    if proc.returncode != 0 or result is None:
+        err = "".join(stderr_chunks).strip()
+        raise RuntimeError(
+            f"engine '{name}' exited {proc.returncode}"
+            + ("" if result is not None else " without a result line")
+            + (f": {err}" if err else ""))
+
+    final = (result.get("text") or "").strip()
+    if state_path and result.get("state") is not None:
+        os.makedirs(os.path.dirname(state_path) or ".", exist_ok=True)
+        with open(state_path, "w", encoding="utf-8") as f:
+            json.dump(result["state"], f)
+
+    if return_meta:
+        return {"text": final, **{k: None for k in _META_KEYS}}
+    return final
 
 
 def run_turn(
@@ -322,6 +460,7 @@ def run_turn(
     timeout=None,
     remember=None,
     auto_memory=True,
+    engine=None,
 ):
     """Run one agent turn.
 
@@ -339,7 +478,23 @@ def run_turn(
     `input_via` — \"argv\" (default) or \"stdin\" (prompt written to stdin).
     `return_meta` — if True, return {\"text\", \"session_id\"}; else return str.
     `proc_holder` — if a dict, filled with {\"proc\": Popen} for streaming turns (abort).
+    `engine` — external engine name (overrides ENGINE env; default: built-in claude).
     """
+    eng = engine or os.environ.get("ENGINE") or "claude"
+    if eng != "claude":
+        if extra_args:
+            raise RuntimeError(
+                f"engine '{eng}' can't honor claude CLI extra_args — refused, not dropped")
+        if session_id:
+            raise RuntimeError(
+                f"engine '{eng}' can't resume a claude session_id — use remember=")
+        if input_via != "argv":
+            raise RuntimeError(f"engine '{eng}' doesn't support input_via={input_via!r}")
+        return _run_engine_turn(
+            eng, text, append_system_prompt=append_system_prompt, cwd=cwd,
+            add_dirs=add_dirs, on_event=on_event, return_meta=return_meta,
+            proc_holder=proc_holder, timeout=timeout, remember=remember)
+
     workdir = os.path.abspath(cwd or AGENT_DIR)
     stream = on_event is not None
     extra_args = list(extra_args or [])

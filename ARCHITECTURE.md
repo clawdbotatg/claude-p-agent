@@ -12,8 +12,7 @@ Two pieces in this repo. Everything else is a module.
 `agent.py` spawns `claude -p` in `AGENT_DIR` with the env scrubbed so the
 child runs on your subscription (not metered API). It owns memory keys
 (`remember=<key>` → session ids resumed/saved, adapters never touch them)
-and honors exactly **two module extension points** — nothing else will ever
-be added to the spawn path:
+and honors exactly **two module extension points** on the spawn path:
 
 1. **env hook** — every executable `modules/<name>/env` runs before every
    spawn; `KEY=VAL` stdout lines merge into the child env (`KEY=` removes).
@@ -30,6 +29,18 @@ be added to the spawn path:
 **The engine never imports module code.** A broken module costs one
 capability; the mind always spawns. Engine changes are ring 0 — see
 `skills/self`.
+
+**Alternate engines** (contract: `PLAN-ENGINES.md`): claude is the built-in
+engine; a module may ship an executable `modules/<name>/engine` speaking
+protocol v0 (one JSON request on stdin, JSONL events on stdout, last line
+`{"type":"result","text","state"}`). The kernel keeps the memory *keys*;
+the engine defines the *state blob* under them, namespaced per engine
+(`.memory/<key>@<engine>.state`). Installing an engine never activates it —
+selection is explicit (`ENGINE=<name>` in `.env`, or `run_turn(engine=…)`),
+and claude-only options (`extra_args`, `session_id`) hard-error on external
+engines rather than silently dropping. This is a deliberate third seam, not
+a drift from the two-extension-point rule: an engine replaces the spawn
+target; it doesn't hook into claude's spawn.
 
 ```python
 from agent import run_turn
@@ -114,6 +125,7 @@ modules.
 | `BRAIN_DIRS` | extra readable dirs (`:`-separated → `--add-dir`) |
 | `CLAUDE_ARGS` | extra CLI flags on every turn |
 | `CLAUDE_BIN` | path to claude CLI (default: `claude`) |
+| `ENGINE` | default engine for every turn (default `claude` = built-in; a name selects `modules/<name>/engine`) |
 | `GH_OWNER` | owner for published modules / bare-name resolution |
 
 Adapter-specific vars (bot tokens, etc.) belong in the module that uses
