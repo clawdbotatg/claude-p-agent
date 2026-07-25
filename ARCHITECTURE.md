@@ -70,6 +70,10 @@ modules.
   `skills/module` — the agent is the package manager
 - Registry: GitHub topic **`claude-p-agent-module`**; publishing is pushing
   a repo with that topic
+- Trust: reading the code is the floor; the `attest` module adds EAS
+  attestations on the exact pinned SHA (checked at install, offered back
+  to the human after a module proves itself in use — "Closing the loop"
+  in `skills/module`). Local trust list, no global scores.
 
 ## Self-protection (summary — the law is `skills/self`)
 

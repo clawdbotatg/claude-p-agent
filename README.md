@@ -23,10 +23,13 @@ You need the [`claude` CLI](https://docs.claude.com/en/docs/claude-code) on a Cl
 
 ```bash
 git clone https://github.com/clawdbotatg/claude-p-agent && cd claude-p-agent
-./tui.sh    # first run asks what to call your agent and writes CLAUDE.md
+tools/module sync   # rebuild the pinned modules (modules/ is gitignored — the lock is the truth)
+./tui.sh            # first run asks what to call your agent and writes CLAUDE.md
 ```
 
 Optional: `cp .env.example .env` for `BRAIN_DIRS` and other knobs.
+(Skipping `sync` is fine too — the agent runs without modules, and can
+install them itself later.)
 
 First thing to try: *"Read skills/extend/SKILL.md and add a tool I ask for."*
 
@@ -130,6 +133,17 @@ per module. Find published modules by GitHub topic
 publish yours with `tools/module publish`. First one:
 [claude-p-router](https://github.com/clawdbotatg/claude-p-router) routes
 every turn to the subscription login with the most headroom.
+
+**Trust is a loop, not a gate.** Before wiring a module the agent reads
+all of its code (always), and — via the
+[attest](https://github.com/clawdbotatg/claude-p-attest) module — checks
+[EAS](https://attest.org) attestations on Base for the exact pinned SHA
+against your local trust list. After a module has served you well, close
+the loop: publish an attestation saying you ran it and didn't get rugged
+(one wallet signature, pennies of gas — the agent offers the pre-filled
+link; see "Closing the loop" in `skills/module`). Got rugged instead?
+Attest `safe: false` with notes. That used-it-and-signed signal is what
+the next agent's audit gets to lean on.
 
 ## Make it yours
 

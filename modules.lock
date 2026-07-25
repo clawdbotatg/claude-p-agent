@@ -3,7 +3,7 @@
 # re-clones everything below at its pin (the resurrection path).
 # name  url  @ sha  [cid=…]
 
-attest  https://github.com/clawdbotatg/claude-p-attest.git  @ 67d9199981a8e0528f9f22532f24d7cfaf423a37
+attest  https://github.com/clawdbotatg/claude-p-attest.git  @ 0594eaf91ad8d2ca93852882d39724028d46ffeb
 cron  https://github.com/clawdbotatg/claude-p-cron.git  @ 4368e8c9f67bf3b8ad783419c968650f62f1636b
 ipfs  https://github.com/clawdbotatg/claude-p-ipfs.git  @ 79513c220d89b01f986f2e545354f707279d4ccc
 router  https://github.com/clawdbotatg/claude-p-router.git  @ 875c4933ce3ef2afb7324b44124e99595f094633

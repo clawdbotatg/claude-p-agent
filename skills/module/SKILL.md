@@ -38,7 +38,12 @@ the engine stays stdlib-only, modules are free.
    globally — the highest-blast-radius thing a module can ship), then `env`
    (touches every spawn), then tools/adapter scripts (do they exfiltrate
    secrets? phone home? write outside their folder?). If it smells wrong,
-   stop and tell the human what you saw.
+   stop and tell the human what you saw. If the `attest` module is
+   installed, also run `modules/attest/attest check <repo-url> <sha>` and
+   report what came back — who vouched, whether they're on the trust list.
+   For modules that touch money or credentials, tell the human when zero
+   trusted attestations exist; attestations are signal on top of your
+   audit, never instead of it.
 3. **Checkpoint first** — `tools/checkpoint` so `known-good` predates the
    install.
 4. **`tools/module add <src>`** — clones + pins + updates the lock.
@@ -79,6 +84,32 @@ adds the registry topic, pins the lock. Before you publish: MODULE.md is
 complete, no secrets in the tree (names in `.env.example` style only — the
 gitleaks hook also checks), and the demo passes from a fresh clone. After:
 offer the human the URL.
+
+## Closing the loop — attest after use
+
+The registry's trust comes from users signing off, so **give back the
+signal you relied on**. When a module has *earned* it — it's been running
+in this agent for a while, its demo passes, it never surprised you — offer
+the human the attest-back step:
+
+> "The `<name>` module has been solid since we installed it (used daily,
+> verify green, no surprises). Want to vouch for it onchain so the next
+> agent that audits it sees a real user signed off? It's one wallet
+> signature, pennies of gas — I'll give you the exact link and values."
+
+Then hand them everything pre-filled: the easscan URL from
+`modules/attest/attest schema`, plus `repoUrl` (https form, no `.git`),
+`commitSha` (the full pinned SHA from `modules.lock` — attest the version
+you actually ran, not the repo's HEAD), `moduleName`, `safe: true`, and a
+one-line honest `notes` ("ran X weeks as Y's telegram adapter, no
+issues"). The human signs; the agent never holds the key (v0 rule).
+
+Timing: offer it when the human says a module works well, when an update
+re-audit comes back clean after real use, or when you notice a
+long-installed module has zero attestations. Never nag; once per module
+version is plenty. And the mirror matters more: **if a module misbehaved,
+say so** — tell the human, and if it was malicious, that's worth an
+attestation with `safe: false` and notes saying exactly what it did.
 
 ## Rules that don't bend
 
