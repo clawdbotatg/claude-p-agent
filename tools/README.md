@@ -16,6 +16,7 @@ Describe each tool in `CLAUDE.md`. Run `tools/verify` after code changes.
 | Tool | What it does |
 |---|---|
 | `verify` | compile all `.py` + run tests — run before saying "fixed" |
+| `engine-check` | protocol conformance for an engine module (`engine-check NAME`) — run before routing turns to it |
 
 ## Private tools
 

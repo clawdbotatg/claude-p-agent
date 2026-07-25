@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""engine-check — protocol v0 conformance for an engine module.
+
+For engine AUTHORS and installers: proves an executable `modules/<name>/engine`
+speaks the engine protocol (contract: PLAN-ENGINES.md) before anything routes
+real turns to it. Mechanical checks only — it can't judge reply *quality*, so
+it prints the replies for you (or the installing agent) to eyeball.
+
+  tools/engine-check NAME [--timeout SECS]
+
+Battery:
+  1. executable exists
+  2. a turn: valid JSONL out, last line {"type":"result","text","state"}, exit 0
+  3. state round-trip: turn 2 fed turn 1's state blob must also conform
+  4. dies loudly: garbage stdin → non-zero exit (never a fake result)
+
+Exit 0 = conforms. Non-zero = the listed check failed. Note: a live backend
+(API key etc.) must be wired per the engine's MODULE.md — a 401 here is a
+wiring problem, not a protocol violation, but it still fails the check
+because an unwired engine must not be routed to either.
+"""
+import json
+import os
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, HERE)
+import agent  # noqa: E402
+
+
+def request(text, state=None):
+    return json.dumps({
+        "v": 0,
+        "text": text,
+        "system": "You are a conformance probe. Follow instructions exactly.",
+        "state": state,
+        "agent_dir": HERE,
+        "options": {"add_dirs": []},
+    })
+
+
+def spawn(exe, moddir, payload, timeout):
+    return subprocess.run(
+        [exe], cwd=moddir, env=agent._child_env(), input=payload,
+        capture_output=True, text=True, timeout=timeout,
+    )
+
+
+def parse_lines(stdout):
+    events, bad = [], []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            events.append(json.loads(line))
+        except ValueError:
+            bad.append(line)
+    return events, bad
+
+
+def conformant_turn(name, exe, moddir, payload, timeout, fails):
+    """Run one turn; return the result event or None (recording failures)."""
+    try:
+        proc = spawn(exe, moddir, payload, timeout)
+    except subprocess.TimeoutExpired:
+        fails.append(f"{name}: no answer within {timeout}s")
+        return None
+    if proc.returncode != 0:
+        fails.append(f"{name}: exited {proc.returncode}: "
+                     + (proc.stderr.strip() or "(no stderr)")[:300])
+        return None
+    events, bad = parse_lines(proc.stdout)
+    if bad:
+        fails.append(f"{name}: non-JSON stdout line(s): {bad[0][:120]!r}")
+        return None
+    if not events or not isinstance(events[-1], dict) \
+            or events[-1].get("type") != "result":
+        fails.append(f"{name}: last stdout line is not a result event")
+        return None
+    result = events[-1]
+    if not isinstance(result.get("text"), str) or not result["text"].strip():
+        fails.append(f"{name}: result.text missing or empty")
+        return None
+    if "state" not in result:
+        fails.append(f"{name}: result has no 'state' key (use null if stateless)")
+        return None
+    return result
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    timeout = 180.0
+    if "--timeout" in sys.argv:
+        timeout = float(sys.argv[sys.argv.index("--timeout") + 1])
+    if len(args) != 1:
+        print(__doc__.strip(), file=sys.stderr)
+        sys.exit(2)
+    name = args[0]
+    moddir = os.path.join(agent.MODULES_DIR, name)
+    exe = os.path.join(moddir, "engine")
+
+    fails = []
+    if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
+        print(f"engine-check: FAIL — no executable modules/{name}/engine",
+              file=sys.stderr)
+        sys.exit(1)
+    print(f"engine-check: {name} — executable found")
+
+    r1 = conformant_turn(
+        "turn", exe, moddir,
+        request("Reply with exactly: CONFORMANCE OK"), timeout, fails)
+    if r1:
+        print(f"engine-check: turn ok — reply: {r1['text'][:80]!r}")
+        if r1["state"] is not None:
+            r2 = conformant_turn(
+                "state round-trip", exe, moddir,
+                request("What did I just ask you to reply with?", r1["state"]),
+                timeout, fails)
+            if r2:
+                print("engine-check: state round-trip ok — reply: "
+                      f"{r2['text'][:80]!r}")
+        else:
+            print("engine-check: stateless engine (state=null) — round-trip skipped")
+
+    try:
+        proc = spawn(exe, moddir, "this is not json", timeout)
+        if proc.returncode == 0:
+            fails.append("dies-loudly: exit 0 on garbage stdin "
+                         "(must refuse, never fake a result)")
+        else:
+            print("engine-check: dies loudly on garbage input — ok")
+    except subprocess.TimeoutExpired:
+        fails.append("dies-loudly: hung on garbage stdin")
+
+    if fails:
+        for f in fails:
+            print(f"engine-check: FAIL — {f}", file=sys.stderr)
+        sys.exit(1)
+    print(f"engine-check: {name} conforms to protocol v0")
+
+
+if __name__ == "__main__":
+    main()
