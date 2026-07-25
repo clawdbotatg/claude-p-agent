@@ -76,6 +76,33 @@ Run `tools/verify` after code changes before claiming something works.
 
 **Do not** add channel logic to `agent.py`. Keep the engine dumb.
 
+## Add an engine (swap what thinks)
+
+An **engine** replaces `claude -p` as the thing that runs a turn — Codex, an
+OpenAI-style API route, anything. It's a module (own repo, pinned in
+`modules.lock`, attestable) shipping one executable, `modules/<name>/engine`,
+in any language. Contract: **`PLAN-ENGINES.md`** (protocol v0). The short form:
+
+1. Read ONE JSON request from stdin, fully, before writing anything:
+   `{"v":0, "text", "system", "state", "agent_dir", "options"}` —
+   `system` is persona + channel policy (rebuild from it every turn, don't
+   store it); `state` is YOUR opaque blob from last turn on this
+   conversation key, or null.
+2. Write JSONL to stdout: any events you like, then as the LAST line
+   `{"type":"result", "text": "...", "state": <your new blob or null>}`.
+3. Die loudly: on any failure exit non-zero with the reason on stderr —
+   never fake a result. The kernel refuses claude-only options
+   (`extra_args`, `session_id`) for you; a chat engine has no tools and
+   should say so in its MODULE.md.
+4. Prove it: `tools/engine-check <name>` (mechanical conformance battery),
+   then the live verify steps in your MODULE.md.
+
+Reference implementation: [claude-p-engine-oai](https://github.com/clawdbotatg/claude-p-engine-oai)
+(~100 lines, stdlib). **Installing an engine never activates it** — selection
+is explicit: `ENGINE=<name>` in `.env`, `run_turn(engine=...)`, or
+`adapters/run.py --engine <name>`. Self-modification always stays on the
+built-in claude engine.
+
 ## Add a "build" tool (self-improvement)
 
 The agent can grow itself by spawning **separate** Claude Code sessions to write code:

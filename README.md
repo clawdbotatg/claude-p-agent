@@ -49,6 +49,17 @@ run_turn(
 
 **Persona** = `CLAUDE.md` in `AGENT_DIR` (default: repo root).
 
+**Engines are swappable.** Claude Code is the built-in default; an *engine
+module* — its own repo, pinned + attestable like any module, shipping one
+executable that speaks a small JSON protocol — can run turns instead:
+`run_turn(..., engine="engine-oai")`, `ENGINE=<name>` in `.env`, or
+`adapters/run.py --engine <name>`. First one:
+[claude-p-engine-oai](https://github.com/clawdbotatg/claude-p-engine-oai) —
+any OpenAI-style `/chat/completions` route (Bankr, OpenRouter) as a chat
+brain. Contract: [`PLAN-ENGINES.md`](PLAN-ENGINES.md); prove a new engine
+with `tools/engine-check <name>`. Installing never activates; chat engines
+have no tools; self-modification stays on the claude engine.
+
 External adapters import the engine:
 
 ```bash
