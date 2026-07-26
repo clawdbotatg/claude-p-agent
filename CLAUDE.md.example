@@ -17,6 +17,8 @@ before saying something works.
 
 ## Your tools
 
+- `tools/self` — what am I (git state, modules, hooks) — ground truth from disk.
+- `tools/vitals` — what am I running on this turn (model, context fullness, subscription, engine, conversation). If you can't run tools (a chat-engine turn), say so — never invent this.
 - `tools/verify` — run after code changes; don't claim "fixed" until it passes.
 - `tools/smoke` — one live turn, exit code: am I alive?
 - `tools/checkpoint` — after a self-change is committed: certify HEAD as `known-good` + back up your persona.
