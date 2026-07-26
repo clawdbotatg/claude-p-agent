@@ -71,13 +71,26 @@ def scrubbed_env():
     return env
 
 
-def _child_env(auto_memory=True):
+# Kernel self-description, stamped into every child env so the agent can know
+# what it's running as (tools/vitals reads these). Set BEFORE module env hooks
+# (a module may branch on them — e.g. route by conversation key) and
+# re-asserted AFTER (a module can never spoof what the kernel actually did).
+_TURN_ENV_KEYS = ("CLAUDE_P_ENGINE", "CLAUDE_P_REMEMBER", "CLAUDE_P_AUTO_MEMORY")
+
+
+def _child_env(auto_memory=True, turn_env=None):
     # The scrub above eats every CLAUDE_CODE_* var — including a user's own
     # CLAUDE_CODE_DISABLE_AUTO_MEMORY — so the opt-out has to be re-injected here.
     env = scrubbed_env()
+    for k in _TURN_ENV_KEYS:      # a nested turn must not inherit the outer one's
+        env.pop(k, None)
     if not auto_memory:
         env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+    if turn_env:
+        env.update(turn_env)
     _apply_module_env(env)
+    if turn_env:
+        env.update(turn_env)
     return env
 
 
@@ -383,8 +396,11 @@ def _run_engine_turn(name, text, *, append_system_prompt=None, cwd=None,
         "options": {"add_dirs": [os.path.expanduser(d) for d in add_dirs or []]},
     }
 
+    turn_env = {"CLAUDE_P_ENGINE": name}
+    if remember:
+        turn_env["CLAUDE_P_REMEMBER"] = str(remember)
     proc = subprocess.Popen(
-        [exe], cwd=moddir, env=_child_env(), text=True, bufsize=1,
+        [exe], cwd=moddir, env=_child_env(turn_env=turn_env), text=True, bufsize=1,
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     if proc_holder is not None:
@@ -530,7 +546,11 @@ def run_turn(
                 if event.get(k) is not None:
                     meta[k] = event[k]
 
-    env = _child_env(auto_memory)
+    turn_env = {"CLAUDE_P_ENGINE": "claude",
+                "CLAUDE_P_AUTO_MEMORY": "1" if auto_memory else "0"}
+    if remember:
+        turn_env["CLAUDE_P_REMEMBER"] = str(remember)
+    env = _child_env(auto_memory, turn_env)
 
     if stream:
         final = _run_streaming(

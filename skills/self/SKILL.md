@@ -26,6 +26,35 @@ check** (`tools/self drift`): docs that lie about the code fail verify.
 When a self-change teaches you a lesson (especially a breakage), save the
 post-mortem to your auto-memory so future selves inherit it.
 
+## Dials — engine controls you can legitimately turn
+
+The engine reads everything from env / `.env` (table in `ARCHITECTURE.md`),
+so tuning yourself is usually a config edit, not a code edit:
+
+- **Model** — `CLAUDE_ARGS="--model <id>"` in `.env` switches every future
+  turn; a module env hook can set `ANTHROPIC_MODEL` *per turn* (a
+  model-router module would live there: cheap model for cron chores, big
+  model for hard asks).
+- **Engine** — `ENGINE=<name>` routes turns to an installed engine module.
+  Chat engines have no tools; self-modification stays on the claude engine.
+- **Thinking budget** — `MAX_THINKING_TOKENS` in `.env`.
+- **Reach** — `BRAIN_DIRS` adds readable directories.
+- **Memory** — adapters pick `remember` keys; `auto_memory=False` for
+  must-start-clean runs; `forget(key)` resets one conversation.
+- **Per-turn env** — ship a module with an `env` hook; that's the sanctioned
+  extension point, not a hack.
+
+The catch: `.env` is **gitignored**, so the watchdog and `git revert` cannot
+undo a bad `.env` edit. Treat `.env` changes like ring 1: note the old value
+in your commit-message-of-record or memory, make the change, `tools/smoke`
+immediately. (`tools/checkpoint` backs `.env` up outside the repo — that's
+the restore point.)
+
+Self-diagnosis starts with the kernel's own stamp: every child env carries
+`CLAUDE_P_ENGINE` / `CLAUDE_P_REMEMBER` / `CLAUDE_P_AUTO_MEMORY` (module
+hooks can read them, never override them) — `tools/vitals` reads these plus
+your live transcript and the router cache.
+
 ## Rings — how much ceremony a change needs
 
 | Ring | Files | If it breaks | Rule |

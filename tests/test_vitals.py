@@ -34,8 +34,13 @@ class TestVitals(unittest.TestCase):
                 f.write(json.dumps({"type": "assistant", "message": {
                     "model": "claude-test-1", "usage": usage}}) + "\n")
             code, out = run_vitals(work, {"CLAUDE_CONFIG_DIR": cfg,
-                                          "CLAUDE_P_CONTEXT_WINDOW": "200000"})
+                                          "CLAUDE_P_CONTEXT_WINDOW": "200000",
+                                          "CLAUDE_P_ENGINE": "claude",
+                                          "CLAUDE_P_REMEMBER": "tg-42",
+                                          "CLAUDE_P_AUTO_MEMORY": "1"})
             self.assertEqual(code, 0)
+            self.assertIn("conversation: persistent — remember key 'tg-42', "
+                          "auto-memory on", out)
             self.assertIn("model: claude-test-1", out)
             self.assertIn("~50k / 200k tokens (25% full)", out)
             self.assertIn("session: abc-123", out)
@@ -49,6 +54,7 @@ class TestVitals(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("session: unknown", out)
             self.assertIn("engine: claude (built-in)", out)
+            self.assertIn("conversation: unknown (not spawned via agent.py", out)
 
 
 if __name__ == "__main__":

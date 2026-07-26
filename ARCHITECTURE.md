@@ -33,6 +33,15 @@ and honors exactly **two module extension points** on the spawn path:
 capability; the mind always spawns. Engine changes are ring 0 — see
 `skills/self`.
 
+**The engine tells the child what it did.** Every spawn is stamped with
+`CLAUDE_P_ENGINE`, `CLAUDE_P_REMEMBER` (the conversation key, absent on a
+stateless one-shot), and `CLAUDE_P_AUTO_MEMORY` — set *before* module env
+hooks run (a module may branch on them) and re-asserted *after* (a module
+can never spoof kernel truth; nested turns never inherit the outer stamp).
+`tools/vitals` joins this stamp with the live transcript (model, exact
+context usage) and the router cache (plan %) into the agent's runtime
+self-diagnostic.
+
 **Alternate engines** (contract: `PLAN-ENGINES.md`): claude is the built-in
 engine; a module may ship an executable `modules/<name>/engine` speaking
 protocol v0 (one JSON request on stdin, JSONL events on stdout, last line
@@ -133,6 +142,10 @@ modules.
 
 Adapter-specific vars (bot tokens, etc.) belong in the module that uses
 them, documented in **its** MODULE.md, values in the gitignored `.env`.
+
+Set **by** the engine into every child (read-only self-description — see
+"The engine tells the child what it did" above): `CLAUDE_P_ENGINE`,
+`CLAUDE_P_REMEMBER`, `CLAUDE_P_AUTO_MEMORY`.
 
 ## Related repos (not modules, not bundled)
 

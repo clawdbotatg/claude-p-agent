@@ -14,7 +14,11 @@ no network:
   subscription      CLAUDE_CONFIG_DIR (the router sets it per turn) mapped
                     to its login name, joined with the router's .cache.json
                     for the plan's usage percentage.
-  engine            ENGINE env (default: built-in claude).
+  engine +          the kernel's own stamp: agent.py sets CLAUDE_P_ENGINE,
+  conversation      CLAUDE_P_REMEMBER and CLAUDE_P_AUTO_MEMORY in every child
+                    env (module hooks can read them, never override them), so
+                    the agent knows if it's a persistent conversation or a
+                    stateless one-shot — and which conversation it is.
 
 Everything degrades to "unknown (why)" — vitals never exits non-zero just
 because a source is missing.
@@ -91,8 +95,19 @@ def _router_pct(name):
 
 
 def main():
-    engine = os.environ.get("ENGINE") or "claude"
+    # kernel self-description — agent.py stamps these into every child env
+    stamped = os.environ.get("CLAUDE_P_ENGINE")
+    engine = stamped or os.environ.get("ENGINE") or "claude"
     print(f"vitals: engine: {engine}" + (" (built-in)" if engine == "claude" else ""))
+    if stamped:
+        key = os.environ.get("CLAUDE_P_REMEMBER")
+        am = "on" if os.environ.get("CLAUDE_P_AUTO_MEMORY") != "0" else "off"
+        conv = (f"persistent — remember key {key!r}" if key
+                else "stateless one-shot (no remember key)")
+        print(f"vitals: conversation: {conv}, auto-memory {am}")
+    else:
+        print("vitals: conversation: unknown (not spawned via agent.py — "
+              "interactive session?)")
 
     cfg = _config_dir()
     name = _account_name(cfg)
