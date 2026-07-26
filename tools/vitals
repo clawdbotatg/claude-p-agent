@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""vitals — runtime self-knowledge: what am I running AS, right now.
+
+  tools/vitals          # model, context fullness, subscription, engine, session
+
+tools/self answers "what is my body" (git, modules, hooks — disk truth).
+vitals answers "what is my mind running on THIS turn" — read-only, no keys,
+no network:
+
+  model + context   from my own live transcript: claude -p appends every
+                    message to <config_dir>/projects/<cwd-slug>/<sid>.jsonl,
+                    and each assistant message carries exact token usage.
+                    The newest-written transcript in this cwd is me.
+  subscription      CLAUDE_CONFIG_DIR (the router sets it per turn) mapped
+                    to its login name, joined with the router's .cache.json
+                    for the plan's usage percentage.
+  engine            ENGINE env (default: built-in claude).
+
+Everything degrades to "unknown (why)" — vitals never exits non-zero just
+because a source is missing.
+
+Knobs: CLAUDE_P_CONTEXT_WINDOW (tokens, default 200000).
+"""
+import json
+import os
+import re
+import sys
+import time
+
+HOME = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+WINDOW = int(os.environ.get("CLAUDE_P_CONTEXT_WINDOW", "200000"))
+FRESH_SECS = 300          # transcript touched within this → it's this session
+
+
+def _config_dir():
+    return os.path.abspath(os.path.expanduser(
+        os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude"))
+
+
+def _account_name(cfg):
+    return "default" if cfg == os.path.expanduser("~/.claude") else os.path.basename(cfg)
+
+
+def _transcript():
+    """Newest .jsonl for this cwd under the active config dir (path, age_s)."""
+    slug = re.sub(r"[^A-Za-z0-9]", "-", os.getcwd())
+    pdir = os.path.join(_config_dir(), "projects", slug)
+    try:
+        files = [os.path.join(pdir, f) for f in os.listdir(pdir) if f.endswith(".jsonl")]
+    except OSError:
+        return None, None
+    if not files:
+        return None, None
+    newest = max(files, key=os.path.getmtime)
+    return newest, time.time() - os.path.getmtime(newest)
+
+
+def _last_usage(path, tail_bytes=512 * 1024):
+    """(model, context_tokens) from the last assistant message with usage."""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            f.seek(max(0, size - tail_bytes))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return None, None
+    for line in reversed(lines):
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        msg = d.get("message") if isinstance(d, dict) else None
+        if d.get("type") == "assistant" and isinstance(msg, dict) and msg.get("usage"):
+            u = msg["usage"]
+            ctx = sum(u.get(k) or 0 for k in (
+                "input_tokens", "cache_read_input_tokens",
+                "cache_creation_input_tokens", "output_tokens"))
+            return msg.get("model"), ctx
+    return None, None
+
+
+def _router_pct(name):
+    try:
+        with open(os.path.join(HOME, "modules", "router", ".cache.json"),
+                  encoding="utf-8") as f:
+            cache = json.load(f)
+    except (OSError, ValueError):
+        return None
+    entry = cache.get(name)
+    return entry.get("pct") if isinstance(entry, dict) else None
+
+
+def main():
+    engine = os.environ.get("ENGINE") or "claude"
+    print(f"vitals: engine: {engine}" + (" (built-in)" if engine == "claude" else ""))
+
+    cfg = _config_dir()
+    name = _account_name(cfg)
+    pct = _router_pct(name)
+    line = f"vitals: subscription: {name} ({cfg})"
+    if pct is not None:
+        line += f" — {pct:.0f}% of plan limit used (router cache)"
+    print(line)
+
+    path, age = _transcript()
+    if path is None:
+        print("vitals: session: unknown (no transcript for this cwd — "
+              "not inside a claude turn, or a fresh session hasn't flushed yet)")
+        return 0
+
+    model, ctx = _last_usage(path)
+    sid = os.path.basename(path)[:-len(".jsonl")]
+    stale = "" if age < FRESH_SECS else \
+        f" — STALE ({age/60:.0f} min old; may be a previous session, not this one)"
+    print(f"vitals: session: {sid} (updated {age:.0f}s ago){stale}")
+    print(f"vitals: model: {model or 'unknown (no assistant message in transcript yet)'}")
+    if ctx is not None:
+        print(f"vitals: context: ~{ctx/1000:.0f}k / {WINDOW//1000}k tokens "
+              f"({100.0 * ctx / WINDOW:.0f}% full)")
+    else:
+        print("vitals: context: unknown (no usage data in transcript yet)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -17,7 +17,9 @@ protects.
 
 **Know yourself by reading, not remembering.** Start with `tools/self`
 (status — ground truth from disk: SHA, checkpoints, modules, active hooks,
-last smoke). For anything deeper, read the file — `ls tools/`, `git log`,
+last smoke) and `tools/vitals` (runtime — what model you are, how full your
+context window is, which subscription this turn runs on, which engine).
+For anything deeper, read the file — `ls tools/`, `git log`,
 `ARCHITECTURE.md`. Never answer from memory; a stale self-image causes
 confident wrong edits — which is also why `tools/verify` runs a **doc-drift
 check** (`tools/self drift`): docs that lie about the code fail verify.

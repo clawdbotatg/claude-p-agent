@@ -123,6 +123,7 @@ the whole session yourself is a rare exception, not the norm. If you're unsure: 
 | **`modules.lock`** | the agent's installed modules, pinned by commit (`tools/module sync` rebuilds them) |
 | **`tools/module`** | list/add/remove/update/sync/scaffold/publish modules |
 | **`tools/self`** | status (what am I right now, from disk) + doc-drift check |
+| **`tools/vitals`** | runtime vitals (what am I running as, this turn): model, context fullness, subscription + plan usage, engine |
 | **`tools/verify`** | compile + tests + doc-drift before you say "done" |
 | **`tools/smoke`** | one live turn, exit code — is the agent alive? |
 | **`tools/checkpoint`** | certify a green HEAD as `known-good` (+ named `checkpoint/…` tags) + back up the persona |

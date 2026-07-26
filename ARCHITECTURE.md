@@ -2,8 +2,11 @@
 
 Written for the agent as much as for humans: this is the map of your own
 body. **Know yourself by reading, not remembering** — when in doubt,
-`tools/self` (status/drift), `git log`, and the files themselves are the
-truth; this document is the guide to where truth lives.
+`tools/self` (status/drift — what my body is, from disk), `tools/vitals`
+(what my mind is running on *this turn*: model, context fullness,
+subscription + plan usage, engine — read live from my own transcript and
+the router cache), `git log`, and the files themselves are the truth; this
+document is the guide to where truth lives.
 
 Two pieces in this repo. Everything else is a module.
 
