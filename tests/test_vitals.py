@@ -48,6 +48,17 @@ class TestVitals(unittest.TestCase):
             self.assertIn(f"subscription: cfg ({cfg})", out)
             self.assertIn("router-chosen", out)
 
+    def test_external_engine_reports_engine_model(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = os.path.join(tmp, "work")
+            os.makedirs(work)
+            code, out = run_vitals(work, {"CLAUDE_CONFIG_DIR": tmp,
+                                          "CLAUDE_P_ENGINE": "engine-ollama",
+                                          "CLAUDE_P_ENGINE_MODEL": "qwen3:4b"})
+            self.assertEqual(code, 0)
+            self.assertIn("model: qwen3:4b (external engine)", out)
+            self.assertNotIn("claude-", out.split("model:")[1])
+
     def test_degrades_without_transcript(self):
         with tempfile.TemporaryDirectory() as tmp:
             work = os.path.join(tmp, "work")

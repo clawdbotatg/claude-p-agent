@@ -121,6 +121,14 @@ def main():
         line += " — pinned/inherited (router did not choose)"
     print(line)
 
+    if stamped and stamped != "claude":
+        # external engine: the claude transcript in this cwd is some OTHER
+        # session's — never report its model/context as ours
+        em = os.environ.get("CLAUDE_P_ENGINE_MODEL")
+        print(f"vitals: model: {em or 'unknown'} (external engine)")
+        print("vitals: context: n/a (external engine manages its own history)")
+        return 0
+
     path, age = _transcript()
     if path is None:
         print("vitals: session: unknown (no transcript for this cwd — "
