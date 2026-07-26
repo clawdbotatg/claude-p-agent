@@ -115,6 +115,10 @@ def main():
     line = f"vitals: subscription: {name} ({cfg})"
     if pct is not None:
         line += f" — {pct:.0f}% of plan limit used (router cache)"
+    if os.environ.get("CLAUDE_P_ROUTER_PLAN") == name:
+        line += " — router-chosen"
+    elif stamped:
+        line += " — pinned/inherited (router did not choose)"
     print(line)
 
     path, age = _transcript()

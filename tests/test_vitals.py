@@ -37,7 +37,8 @@ class TestVitals(unittest.TestCase):
                                           "CLAUDE_P_CONTEXT_WINDOW": "200000",
                                           "CLAUDE_P_ENGINE": "claude",
                                           "CLAUDE_P_REMEMBER": "tg-42",
-                                          "CLAUDE_P_AUTO_MEMORY": "1"})
+                                          "CLAUDE_P_AUTO_MEMORY": "1",
+                                          "CLAUDE_P_ROUTER_PLAN": "cfg"})
             self.assertEqual(code, 0)
             self.assertIn("conversation: persistent — remember key 'tg-42', "
                           "auto-memory on", out)
@@ -45,6 +46,7 @@ class TestVitals(unittest.TestCase):
             self.assertIn("~50k / 200k tokens (25% full)", out)
             self.assertIn("session: abc-123", out)
             self.assertIn(f"subscription: cfg ({cfg})", out)
+            self.assertIn("router-chosen", out)
 
     def test_degrades_without_transcript(self):
         with tempfile.TemporaryDirectory() as tmp:
