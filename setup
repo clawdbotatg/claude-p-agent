@@ -50,6 +50,116 @@ def probe_ollama():
         return None
 
 
+def _get_json(url, timeout=1.5):
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+# Common local OpenAI-compatible servers (besides Ollama's native API).
+LOCAL_SERVERS = [("LM Studio", 1234), ("vLLM", 8000),
+                 ("llama.cpp", 8080), ("Jan", 1337)]
+# API keys people commonly already have in their shell env → known base URLs.
+KEY_BASES = [
+    ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"),
+    ("OPENAI_API_KEY", "https://api.openai.com/v1"),
+    ("GROQ_API_KEY", "https://api.groq.com/openai/v1"),
+    ("DEEPSEEK_API_KEY", "https://api.deepseek.com/v1"),
+    ("TOGETHER_API_KEY", "https://api.together.xyz/v1"),
+    ("MISTRAL_API_KEY", "https://api.mistral.ai/v1"),
+    ("XAI_API_KEY", "https://api.x.ai/v1"),
+]
+
+
+def scan_local():
+    """Everything on this machine an agent could think with."""
+    found = []
+    c = find_claude()
+    if c:
+        found.append({"kind": "claude", "label": f"Claude Code CLI ({c})"})
+    models = probe_ollama()
+    if models is not None:
+        found.append({"kind": "ollama", "models": models,
+                      "label": f"Ollama server — {len(models)} model(s): "
+                               f"{', '.join(models[:5])}"
+                               + ("…" if len(models) > 5 else "")})
+    elif shutil.which("ollama"):
+        found.append({"kind": "note", "label":
+                      "ollama is installed but the server isn't running "
+                      "(`ollama serve`, then re-scan)"})
+    for name, port in LOCAL_SERVERS:
+        data = _get_json(f"http://localhost:{port}/v1/models")
+        if isinstance(data, dict) and isinstance(data.get("data"), list):
+            ids = [m.get("id") for m in data["data"] if m.get("id")]
+            found.append({"kind": "oai-server", "name": name, "port": port,
+                          "models": ids,
+                          "label": f"{name} server on :{port} — "
+                                   f"{', '.join(ids[:4]) or 'no models loaded'}"})
+    for var, base in KEY_BASES:
+        if os.environ.get(var, "").strip():
+            found.append({"kind": "key", "var": var, "base": base,
+                          "label": f"${var} in your environment → {base}"})
+    for cli in ("codex", "gemini"):
+        if shutil.which(cli):
+            found.append({"kind": "note", "label":
+                          f"`{cli}` CLI found — no engine module for it yet "
+                          "(see TODO-MODULES.md; contributions welcome)"})
+    return found
+
+
+def bootstrap_from_scan():
+    found = scan_local()
+    if not found:
+        print("\nscan: nothing usable found — no claude CLI, no local model "
+              "server, no known API keys in env.")
+        return None
+    print("\nscan — usable brains on this machine:")
+    usable = []
+    for f in found:
+        if f["kind"] == "note":
+            print(f"      · {f['label']}")
+        else:
+            usable.append(f)
+            print(f"  [{len(usable)}] {f['label']}")
+    if not usable:
+        return None
+    pick = ask(f"use which? [1-{len(usable)}, Enter=1]: ", "1")
+    try:
+        f = usable[max(0, int(pick) - 1)]
+    except (ValueError, IndexError):
+        f = usable[0]
+    if f["kind"] == "claude":
+        return "claude" if bootstrap_claude() else None
+    if f["kind"] == "ollama":
+        return "engine-ollama" if bootstrap_ollama(f["models"]) else None
+    if f["kind"] == "oai-server":
+        models = f["models"]
+        model = ask(f"model? {', '.join(models[:8])} "
+                    f"[{models[0] if models else ''}]: ",
+                    models[0] if models else "")
+        if not model or not module_add("engine-oai"):
+            return None
+        env_write(ENGINE="engine-oai",
+                  OAI_ENGINE_BASE_URL=f"http://localhost:{f['port']}/v1",
+                  OAI_ENGINE_API_KEY="local", OAI_ENGINE_MODEL=model)
+        print(f"engine: engine-oai → {f['name']} on :{f['port']} · {model} "
+              "(local, keyless)")
+        return "engine-oai"
+    if f["kind"] == "key":
+        model = ask("model id for that provider (e.g. qwen/qwen3-coder): ")
+        if not model or not module_add("engine-oai"):
+            return None
+        env_write(ENGINE="engine-oai", OAI_ENGINE_BASE_URL=f["base"],
+                  OAI_ENGINE_API_KEY=os.environ[f["var"]],
+                  OAI_ENGINE_MODEL=model)
+        print(f"engine: engine-oai → {f['base']} · {model} (key copied from "
+              f"${f['var']} into the gitignored .env)")
+        return "engine-oai"
+    return None
+
+
 def render(text):
     """Show the agent's reply the way the TUI would (markdown → ANSI)."""
     try:
@@ -228,8 +338,14 @@ def main():
                   + (f"; running with {len(models)} model(s)" if models
                      else "; not running yet"))
             print("  [k] any OpenAI-style API key — OpenRouter, Groq, …")
-            pick = ask("which? [c/o/k]: ", "c").lower()[:1]
-            if pick == "o":
+            print("  [s] scan this machine for anything usable")
+            pick = ask("which? [c/o/k/s]: ", "c").lower()[:1]
+            if pick == "s":
+                engine = bootstrap_from_scan()
+                if not engine:
+                    print("re-run ./setup anytime.")
+                    return 0
+            elif pick == "o":
                 if not bootstrap_ollama(models):
                     return 0
                 engine = "engine-ollama"
