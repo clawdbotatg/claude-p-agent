@@ -285,6 +285,28 @@ def bootstrap_ollama(models):
     return True
 
 
+def bootstrap_openai():
+    if shutil.which("codex"):
+        print("(found the `codex` CLI — no engine module wraps it yet, see "
+              "TODO-MODULES.md;\nwiring the OpenAI API instead)")
+    envkey = os.environ.get("OPENAI_API_KEY", "").strip()
+    key = ask("OpenAI API key" + (" [found $OPENAI_API_KEY — Enter to use it]"
+                                  if envkey else "") + ": ", envkey)
+    if not key:
+        print("no key — get one at https://platform.openai.com, then re-run")
+        return False
+    model = ask("model id (see platform.openai.com/docs/models, "
+                "e.g. gpt-5-mini): ")
+    if not model or not module_add("engine-oai"):
+        return False
+    env_write(ENGINE="engine-oai",
+              OAI_ENGINE_BASE_URL="https://api.openai.com/v1",
+              OAI_ENGINE_API_KEY=key, OAI_ENGINE_MODEL=model)
+    print(f"engine: engine-oai → api.openai.com · {model} — metered API, "
+          "chat-only (key stays in the gitignored .env)")
+    return True
+
+
 def bootstrap_oai():
     base = ask("API base URL [https://openrouter.ai/api/v1]: ",
                "https://openrouter.ai/api/v1")
@@ -337,9 +359,10 @@ def main():
             print("  [o] local Ollama — free, private"
                   + (f"; running with {len(models)} model(s)" if models
                      else "; not running yet"))
+            print("  [g] OpenAI — Codex / GPT models (API key)")
             print("  [k] any OpenAI-style API key — OpenRouter, Groq, …")
             print("  [s] scan this machine for anything usable")
-            pick = ask("which? [c/o/k/s]: ", "c").lower()[:1]
+            pick = ask("which? [c/o/g/k/s]: ", "c").lower()[:1]
             if pick == "s":
                 engine = bootstrap_from_scan()
                 if not engine:
@@ -349,6 +372,10 @@ def main():
                 if not bootstrap_ollama(models):
                     return 0
                 engine = "engine-ollama"
+            elif pick == "g":
+                if not bootstrap_openai():
+                    return 0
+                engine = "engine-oai"
             elif pick == "k":
                 if not bootstrap_oai():
                     return 0
