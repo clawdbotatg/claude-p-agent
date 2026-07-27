@@ -219,7 +219,9 @@ fully-auditable configuration. Greet your human briefly, then ask them —
 in plain language, no menus — how they want you to work. Offer a few
 hints, one short line each: the pinned-but-not-installed modules are
 {mods} (read modules.lock and each module's repo for details); channels
-like telegram are modules too. If they want nothing, that's a great
+like telegram are modules too. Don't guess at what a module does — you
+haven't read them yet; describe one only if you're sure, otherwise just
+name it and note you'd read it before installing. If they want nothing, that's a great
 answer — stay minimal. Keep it short and warm. {powers} Their reply comes
 through this same conversation."""
 
