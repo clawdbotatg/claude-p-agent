@@ -452,6 +452,16 @@ def bootstrap_claude_md(*, interactive):
     return name
 
 
+# The TUI is the OWNER'S console: the agent gets full hands inside its own
+# directory (in -p mode, tools are silently DENIED without this — the agent
+# couldn't run tools/module or edit itself). This is the trust model, not an
+# oversight: the mechanical brakes are the guard hook (PreToolUse hooks fire
+# regardless of permission mode) and the rings in skills/self. Untrusted
+# channels never get this — their adapters pass CLI locks instead
+# (--permission-mode plan / --disallowedTools, see skills/extend).
+OWNER_PERMS = ["--permission-mode", "bypassPermissions"]
+
+
 def main():
     # MEMORY. The TUI is EPHEMERAL by default: each instance gets its OWN claude
     # session (held in-memory for this run only), so two TUIs running at once are two
@@ -476,7 +486,7 @@ def main():
         msg = sys.stdin.read().strip()
         if msg:
             try:
-                print(run_turn(msg, remember=remember))
+                print(run_turn(msg, remember=remember, extra_args=OWNER_PERMS))
             except KeyboardInterrupt:  # ctrl-c mid-turn → abort cleanly, no traceback
                 print(f"{DIM}  ⏹ turn aborted{RESET}", file=sys.stderr)
                 sys.exit(130)
@@ -552,6 +562,7 @@ def main():
                     msg, on_event=on_event, return_meta=True,
                     remember=remember,
                     session_id=(None if remember else session_id),
+                    extra_args=OWNER_PERMS,
                 )
             if not remember:                      # carry continuity within THIS run only
                 session_id = result.get("session_id") or session_id

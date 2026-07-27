@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""setup — the one command after cloning. No menus: you talk to the agent.
+
+  git clone <repo> && cd <repo> && ./setup
+
+It writes a persona (asks one question: a name), then wakes the agent for
+its FIRST CONVERSATION — the agent asks how you want it to work (engine,
+modules, channels) in plain language and installs what you ask for, per
+skills/module. You start with ZERO modules: the lightest, fully-auditable
+configuration — this repo plus the claude CLI (`agent.py` is the whole
+engine; read it).
+
+The first conversation is remembered under the key "main" (that's your
+durable thread: `./tui.sh --remember main`). Re-running setup is safe — it
+never overwrites what exists and won't repeat the kickoff.
+"""
+import os
+import shutil
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def read_lock_names():
+    names = []
+    try:
+        with open(os.path.join(HERE, "modules.lock"), encoding="utf-8") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) == 4 and parts[2] == "@":
+                    names.append(parts[0])
+    except OSError:
+        pass
+    return names
+
+
+KICKOFF = """(first-run setup — from ./setup, not the human) You were just
+cloned and have ZERO modules installed: the lightest, fully-auditable
+configuration. Greet your human briefly, then ask them — in plain
+language, no menus — how they want you to work. Offer a few hints, one
+short line each: the claude engine is your default and the only one that
+can use tools; the pinned-but-not-installed modules are {mods} (read
+modules.lock and each module's repo for details); channels like telegram
+are modules too. Whatever they answer, install and wire it yourself per
+skills/module (audit first, verify after), and if they want nothing,
+that's a great answer — stay minimal. Keep the whole thing short and
+warm. Their reply comes through this same conversation."""
+
+
+def main():
+    print("claude-p-agent setup — an agent is `claude -p` in a directory,")
+    print("with a persona and tools. The engine is agent.py; audit it first.\n")
+
+    # 1. persona — the one typed question
+    persona = os.path.join(HERE, "CLAUDE.md")
+    if os.path.isfile(persona):
+        print("persona: CLAUDE.md already exists — keeping it")
+    else:
+        try:
+            name = (input("What should your agent be called? [Agent]: ")
+                    .strip() or "Agent")
+        except EOFError:
+            name = "Agent"
+        with open(os.path.join(HERE, "CLAUDE.md.example"), encoding="utf-8") as f:
+            text = f.read()
+        text = text.split("-->", 1)[-1].lstrip()          # drop template banner
+        with open(persona, "w", encoding="utf-8") as f:
+            f.write(text.replace("<AGENT NAME>", name))
+        print(f"persona: wrote CLAUDE.md — your agent is {name!r} (edit anytime)")
+
+    # 2. the engine must exist before anyone can talk
+    if not shutil.which(os.environ.get("CLAUDE_BIN", "claude")):
+        print("\nNo `claude` CLI found. Install it and sign in to a Claude")
+        print("subscription (https://docs.claude.com/en/docs/claude-code),")
+        print("then re-run ./setup — your agent will take it from there.")
+        return 0
+
+    # 3. hand over to the agent — the rest of setup is a conversation
+    if not sys.stdin.isatty():
+        print("\n(non-interactive run: skipping the first conversation — "
+              "run ./tui.sh to talk)")
+        return 0
+    kicked = os.path.isfile(os.path.join(HERE, ".memory", "main.session"))
+    if not kicked:
+        print("\nwaking your agent (one moment)…\n")
+        sys.path.insert(0, HERE)
+        from agent import run_turn
+        mods = ", ".join(read_lock_names()) or "none yet"
+        try:
+            # owner's console: full hands, same as the TUI (guard hook still fires)
+            print(run_turn(KICKOFF.format(mods=mods), remember="main",
+                           extra_args=["--permission-mode", "bypassPermissions"]))
+        except Exception as e:
+            print(f"[error] first turn failed: {e}", file=sys.stderr)
+            print("fix the above, then: ./tui.sh --remember main")
+            return 1
+    print("\n(answer in the prompt below — same conversation, key 'main')\n")
+    tui = os.path.join(HERE, "tui.sh")
+    os.execv(tui, [tui, "--remember", "main"])
+
+
+if __name__ == "__main__":
+    sys.exit(main())

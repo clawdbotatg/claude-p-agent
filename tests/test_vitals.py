@@ -12,7 +12,11 @@ VITALS = os.path.join(HOME, "tools", "vitals")
 
 
 def run_vitals(cwd, env_extra):
-    env = {**os.environ, **env_extra}
+    # strip inherited kernel stamps: when verify runs INSIDE an agent turn,
+    # the live CLAUDE_P_* env would leak into the "not spawned" scenarios
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("CLAUDE_P_")}
+    env.update(env_extra)
     r = subprocess.run([sys.executable, VITALS], cwd=cwd, env=env,
                        capture_output=True, text=True)
     return r.returncode, r.stdout
