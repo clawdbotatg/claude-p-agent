@@ -3,15 +3,16 @@
 
   git clone <repo> && cd <repo> && ./setup
 
-Writes a persona (asks one question: a name), gets SOME brain runnable —
-Claude Code is the default and the only full body (tools, self-editing),
-but it is NOT a dependency: a local Ollama model or any OpenAI-style API
-key (OpenRouter, Groq, …) works too, no Anthropic account required — then
-wakes the agent for its FIRST CONVERSATION. The agent asks how you want it
-to work and (when it has tools) installs what you ask for, per
-skills/module. You start with ZERO modules beyond the engine you picked:
-the lightest, fully-auditable configuration (`agent.py` is the whole
-engine; read it).
+One question: which BRAIN — Enter scans the machine (claude CLI, local
+Ollama / LM Studio / vLLM / llama.cpp / Jan servers, API keys already in
+your env) and wires the best thing found. Claude Code is the strongest
+choice (the only full body: tools, self-editing) but NOT a dependency —
+a local model or any OpenAI-style key works, no Anthropic account
+required. Then the agent wakes for its FIRST CONVERSATION and asks the
+question that actually matters: what is its JOB? (A name is optional
+trivia it asks about last.) You start with ZERO modules beyond the
+engine: the lightest, fully-auditable configuration (`agent.py` is the
+whole engine; read it).
 
 The first conversation is remembered under the key "main" (your durable
 thread: `./tui.sh --remember main`). Re-running setup is safe — it never
@@ -125,11 +126,14 @@ def bootstrap_from_scan():
             print(f"  [{len(usable)}] {f['label']}")
     if not usable:
         return None
-    pick = ask(f"use which? [1-{len(usable)}, Enter=1]: ", "1")
-    try:
-        f = usable[max(0, int(pick) - 1)]
-    except (ValueError, IndexError):
+    if len(usable) == 1:
         f = usable[0]
+    else:
+        pick = ask(f"use which? [1-{len(usable)}, Enter=1]: ", "1")
+        try:
+            f = usable[max(0, int(pick) - 1)]
+        except (ValueError, IndexError):
+            f = usable[0]
     if f["kind"] == "claude":
         return "claude" if bootstrap_claude() else None
     if f["kind"] == "ollama":
@@ -213,27 +217,24 @@ def ask(prompt, default=""):
         return default
 
 
-KICKOFF = """(first-run setup — from ./setup, not the human) You were just
-cloned and have no modules installed beyond your engine: the lightest,
-fully-auditable configuration. Greet your human briefly, then ask them —
-in plain language, no menus — how they want you to work. Offer a few
-hints, one short line each: the pinned-but-not-installed modules are
-{mods} (read modules.lock and each module's repo for details); channels
-like telegram are modules too. Don't guess at what a module does — you
-haven't read them yet; describe one only if you're sure, otherwise just
-name it and note you'd read it before installing. If they want nothing, that's a great
-answer — stay minimal. Keep it short and warm. {powers} Their reply comes
-through this same conversation."""
+KICKOFF = """(first-run setup — from ./setup, not the human) In ONE short
+line: you're alive, running on {engdesc}, nothing else installed. Then
+ask — one compact message, no lists: What is my job? What should I
+handle or build for you first? (And if you want me to have a name, tell
+me — otherwise I don't need one.) Do NOT enumerate modules or
+capabilities unless they ask what you can do — then read modules.lock
+and your skills and answer from those, never from guesses. {powers}
+Their reply comes through this same conversation."""
 
-POWERS_CLAUDE = """You run on the claude engine, so you have real tools:
-whatever they ask for, install and wire it yourself per skills/module
-(audit first, verify after)."""
+POWERS_CLAUDE = """You have real tools: when they give you a job (or a
+name), act on it — record it in CLAUDE.md yourself and install or build
+what the job needs per skills/module (audit first, verify after)."""
 
 POWERS_CHAT = """You run on a chat engine ({eng}) — you have NO tools this
-session: never pretend to run commands or invent output. When they want
-something installed, give them the exact commands to run themselves
-(tools/module add <name>; config lines for the gitignored .env), and note
-that the claude engine is the only one that can act on its own."""
+session: never pretend to run commands or invent output. Remember the job
+and name in conversation, and give them exact commands to run themselves
+for anything that needs installing (tools/module add <name>; lines for
+the gitignored .env)."""
 
 
 def bootstrap_claude():
@@ -331,62 +332,46 @@ def main():
     print("claude-p-agent setup — an agent is a brain in a directory,")
     print("with a persona and tools. The engine is agent.py; audit it first.\n")
 
-    # 1. persona — the one typed question
+    # 1. persona — placeholder; its NAME is trivia, its JOB is the point,
+    # and the agent asks about both itself in the first conversation
     persona = os.path.join(HERE, "CLAUDE.md")
-    if os.path.isfile(persona):
-        print("persona: CLAUDE.md already exists — keeping it")
-    else:
-        name = ask("What should your agent be called? [Agent]: ", "Agent")
+    if not os.path.isfile(persona):
         with open(os.path.join(HERE, "CLAUDE.md.example"), encoding="utf-8") as f:
             text = f.read()
-        text = text.split("-->", 1)[-1].lstrip()          # drop template banner
         with open(persona, "w", encoding="utf-8") as f:
-            f.write(text.replace("<AGENT NAME>", name))
-        print(f"persona: wrote CLAUDE.md — your agent is {name!r} (edit anytime)")
+            f.write(text.split("-->", 1)[-1].lstrip()
+                    .replace("<AGENT NAME>", "Agent"))
 
-    # 2. some brain must be runnable — Claude Code is the default, not a dependency
+    # 2. the one question: which brain (Enter = scan the machine)
     engine = os.environ.get("ENGINE")                 # respect an existing .env
     if not engine:
-        claude = find_claude()
-        if claude:
-            os.environ["CLAUDE_BIN"] = claude
-            engine = "claude"
-            print("engine: claude (found the CLI — full body: tools, "
-                  "self-editing)")
-        else:
-            models = probe_ollama()
-            print("\nNo Claude Code here. Your agent needs a brain — any of:")
-            print("  [s] scan this machine for anything usable (default)")
-            print("  [c] Claude Code — the full body; needs a Claude "
-                  "subscription")
-            print("  [g] OpenAI — Codex / GPT models (API key)")
-            print("  [o] local Ollama — free, private"
-                  + (f"; running with {len(models)} model(s)" if models
-                     else "; not running yet"))
-            print("  [k] any OpenAI-style API key — OpenRouter, Groq, …")
-            pick = ask("which? [s/c/g/o/k]: ", "s").lower()[:1]
-            if pick == "s":
-                engine = bootstrap_from_scan()
-                if not engine:
-                    print("re-run ./setup anytime.")
-                    return 0
-            elif pick == "o":
-                if not bootstrap_ollama(models):
-                    return 0
-                engine = "engine-ollama"
-            elif pick == "g":
-                if not bootstrap_openai():
-                    return 0
-                engine = "engine-oai"
-            elif pick == "k":
-                if not bootstrap_oai():
-                    return 0
-                engine = "engine-oai"
-            else:
-                if not bootstrap_claude():
-                    print("re-run ./setup anytime — or pick [o]/[k] next time.")
-                    return 0
+        if not sys.stdin.isatty():
+            claude = find_claude()
+            if claude:
+                os.environ["CLAUDE_BIN"] = claude
                 engine = "claude"
+                print("engine: claude")
+            else:
+                print("(non-interactive: no engine wired — run ./setup "
+                      "interactively)")
+                return 0
+        else:
+            pick = ask("engine? [scan]  (c claude · g gpt/codex · o ollama · "
+                       "k any api key): ", "s").lower()[:1]
+            if pick == "o":
+                engine = "engine-ollama" if bootstrap_ollama(probe_ollama()) \
+                    else None
+            elif pick == "g":
+                engine = "engine-oai" if bootstrap_openai() else None
+            elif pick == "k":
+                engine = "engine-oai" if bootstrap_oai() else None
+            elif pick == "c":
+                engine = "claude" if bootstrap_claude() else None
+            else:
+                engine = bootstrap_from_scan()
+            if not engine:
+                print("re-run ./setup anytime.")
+                return 0
 
     # 3. hand over to the agent — the rest of setup is a conversation
     if not sys.stdin.isatty():
@@ -401,14 +386,19 @@ def main():
         sys.path.insert(0, HERE)
         from agent import run_turn
         eng = os.environ.get("ENGINE") or engine or "claude"
-        mods = ", ".join(n for n, _u, _s in read_lock()) or "none yet"
+        if eng == "claude":
+            engdesc = "the claude engine (full tools)"
+        else:
+            model = (os.environ.get("OLLAMA_ENGINE_MODEL")
+                     or os.environ.get("OAI_ENGINE_MODEL") or "")
+            engdesc = eng + (f" · {model}" if model else "")
         powers = POWERS_CLAUDE if eng == "claude" else POWERS_CHAT.format(eng=eng)
         # owner's console: full hands on claude (guard hook still fires);
         # external engines take no claude CLI flags
         extra = (["--permission-mode", "bypassPermissions"]
                  if eng == "claude" else None)
         try:
-            print(render(run_turn(KICKOFF.format(mods=mods, powers=powers),
+            print(render(run_turn(KICKOFF.format(engdesc=engdesc, powers=powers),
                                   remember="main", extra_args=extra)))
         except Exception as e:
             if eng == "claude" and find_claude():
@@ -418,7 +408,7 @@ def main():
                 subprocess.call([os.environ.get("CLAUDE_BIN", "claude")])
                 try:
                     print(render(run_turn(
-                        KICKOFF.format(mods=mods, powers=powers),
+                        KICKOFF.format(engdesc=engdesc, powers=powers),
                         remember="main", extra_args=extra)))
                 except Exception as e2:
                     print(f"[error] still failing: {e2}", file=sys.stderr)

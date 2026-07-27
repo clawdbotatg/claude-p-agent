@@ -30,18 +30,21 @@ offers to install what's missing, and walks you through sign-in.
 
 ```bash
 git clone https://github.com/clawdbotatg/claude-p-agent && cd claude-p-agent
-./setup             # one typed question (a name) — then the agent takes over
+./setup             # one question: which brain (Enter = scan the machine)
 ```
 
-`setup` writes a persona and wakes the agent for its **first
-conversation**: it asks how you want it to work — engine, modules,
-channels — in plain language, and installs what you ask for itself
-(audited and verified, per `skills/module`). No menus. Saying "nothing"
-is a great answer: **you start with zero modules** — the lightest,
-fully-auditable agent, just this repo plus the `claude` CLI (`agent.py`
-is the entire engine, one file). Later: `./tui.sh --remember main`
-reopens that same thread; plain `./tui.sh` is a throwaway one;
-`tools/module sync` installs the full pinned loadout from `modules.lock`.
+`setup` asks exactly one thing — **which engine** (Enter scans the
+machine and wires the best brain it finds) — then wakes the agent for
+its **first conversation**, where it asks the question that actually
+matters: **"What is my job? What should I build for you first?"** (a
+name is optional trivia it asks about last). Answer in plain language;
+on the claude engine it installs and builds what the job needs itself,
+audited and verified per `skills/module`. "Just chat" is a fine job:
+**you start with zero modules** — the lightest, fully-auditable agent
+(`agent.py` is the entire engine, one file). Later: `./tui.sh
+--remember main` reopens that same thread; plain `./tui.sh` is a
+throwaway one; `tools/module sync` installs the full pinned loadout
+from `modules.lock`.
 
 Optional: `cp .env.example .env` for `BRAIN_DIRS` and other knobs.
 
@@ -130,7 +133,7 @@ the whole session yourself is a rare exception, not the norm. If you're unsure: 
 
 | Piece | What it is |
 |---|---|
-| **`setup`** | the one command after cloning — writes a persona, then the agent itself asks how you want it to work (default: zero modules) |
+| **`setup`** | the one command after cloning — picks a brain (Enter = scan), then the agent asks what its job is (default: zero modules) |
 | **`agent.py`** | spawn `claude -p`, scrub env, return reply — plus the two module extension points |
 | **`tui.sh` / `adapters/cli.py`** | terminal REPL (`--remember <key>` to pick a conversation) |
 | **`adapters/run.py`** | general non-interactive runner — own `--cwd`/`--tool`/`--remember <key>`, for shell/Node/cron callers |
