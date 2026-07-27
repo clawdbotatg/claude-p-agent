@@ -459,7 +459,10 @@ def bootstrap_claude_md(*, interactive):
 # regardless of permission mode) and the rings in skills/self. Untrusted
 # channels never get this — their adapters pass CLI locks instead
 # (--permission-mode plan / --disallowedTools, see skills/extend).
-OWNER_PERMS = ["--permission-mode", "bypassPermissions"]
+# External engines (ENGINE=<module> in .env) take no claude CLI flags — the
+# kernel refuses them — and have no tools to permit anyway.
+OWNER_PERMS = (["--permission-mode", "bypassPermissions"]
+               if (os.environ.get("ENGINE") or "claude") == "claude" else None)
 
 
 def main():

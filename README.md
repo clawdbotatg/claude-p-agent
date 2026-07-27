@@ -19,7 +19,14 @@ Optional related projects (not bundled):
 
 ## Quickstart
 
-You need the [`claude` CLI](https://docs.claude.com/en/docs/claude-code) on a Claude subscription (OAuth, not an API key).
+**Bring any brain — Claude Code is the default, not a dependency.** The
+[`claude` CLI](https://docs.claude.com/en/docs/claude-code) on a Claude
+subscription is the only *full body* (tools, self-editing, module
+installs). Without it, `./setup` bootstraps onto a **local Ollama** model
+(free, private, no account — it recommends the smallest one measured to
+actually work) or **any OpenAI-style API key** (OpenRouter, Groq, …) —
+chat-only engines, still your agent. Setup detects what's on the machine,
+offers to install what's missing, and walks you through sign-in.
 
 ```bash
 git clone https://github.com/clawdbotatg/claude-p-agent && cd claude-p-agent

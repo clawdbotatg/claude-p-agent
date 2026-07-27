@@ -3,23 +3,51 @@
 
   git clone <repo> && cd <repo> && ./setup
 
-It writes a persona (asks one question: a name), then wakes the agent for
-its FIRST CONVERSATION — the agent asks how you want it to work (engine,
-modules, channels) in plain language and installs what you ask for, per
-skills/module. You start with ZERO modules: the lightest, fully-auditable
-configuration — this repo plus the claude CLI (`agent.py` is the whole
+Writes a persona (asks one question: a name), gets SOME brain runnable —
+Claude Code is the default and the only full body (tools, self-editing),
+but it is NOT a dependency: a local Ollama model or any OpenAI-style API
+key (OpenRouter, Groq, …) works too, no Anthropic account required — then
+wakes the agent for its FIRST CONVERSATION. The agent asks how you want it
+to work and (when it has tools) installs what you ask for, per
+skills/module. You start with ZERO modules beyond the engine you picked:
+the lightest, fully-auditable configuration (`agent.py` is the whole
 engine; read it).
 
-The first conversation is remembered under the key "main" (that's your
-durable thread: `./tui.sh --remember main`). Re-running setup is safe — it
-never overwrites what exists and won't repeat the kickoff.
+The first conversation is remembered under the key "main" (your durable
+thread: `./tui.sh --remember main`). Re-running setup is safe — it never
+overwrites what exists and won't repeat the kickoff.
 """
+import json
 import os
 import shutil
 import subprocess
 import sys
+import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def find_claude():
+    """The claude binary: PATH first, then the installer's known homes."""
+    hit = shutil.which(os.environ.get("CLAUDE_BIN", "claude"))
+    if hit:
+        return hit
+    for p in ("~/.local/bin/claude", "~/.claude/local/claude"):
+        p = os.path.expanduser(p)
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    return None
+
+
+def probe_ollama():
+    """Installed model names if a local Ollama server answers, else None."""
+    try:
+        with urllib.request.urlopen("http://localhost:11434/api/tags",
+                                    timeout=2) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return [m.get("name") for m in data.get("models", []) if m.get("name")]
+    except Exception:
+        return None
 
 
 def render(text):
@@ -39,34 +67,134 @@ def render(text):
     return text
 
 
-def read_lock_names():
-    names = []
+def read_lock():
+    entries = []
     try:
         with open(os.path.join(HERE, "modules.lock"), encoding="utf-8") as f:
             for line in f:
                 parts = line.split()
                 if len(parts) == 4 and parts[2] == "@":
-                    names.append(parts[0])
+                    entries.append((parts[0], parts[1], parts[3]))
     except OSError:
         pass
-    return names
+    return entries
+
+
+def module_add(name):
+    match = [e for e in read_lock() if e[0] == name]
+    if not match:
+        return False
+    _n, url, sha = match[0]
+    r = subprocess.run([sys.executable, os.path.join(HERE, "tools", "module"),
+                        "add", url, name, "--sha", sha], cwd=HERE)
+    return r.returncode == 0
+
+
+def env_write(**kv):
+    with open(os.path.join(HERE, ".env"), "a", encoding="utf-8") as f:
+        for k, v in kv.items():
+            f.write(f"{k}={v}\n")
+
+
+def ask(prompt, default=""):
+    try:
+        return input(prompt).strip() or default
+    except EOFError:
+        return default
 
 
 KICKOFF = """(first-run setup — from ./setup, not the human) You were just
-cloned and have ZERO modules installed: the lightest, fully-auditable
-configuration. Greet your human briefly, then ask them — in plain
-language, no menus — how they want you to work. Offer a few hints, one
-short line each: the claude engine is your default and the only one that
-can use tools; the pinned-but-not-installed modules are {mods} (read
-modules.lock and each module's repo for details); channels like telegram
-are modules too. Whatever they answer, install and wire it yourself per
-skills/module (audit first, verify after), and if they want nothing,
-that's a great answer — stay minimal. Keep the whole thing short and
-warm. Their reply comes through this same conversation."""
+cloned and have no modules installed beyond your engine: the lightest,
+fully-auditable configuration. Greet your human briefly, then ask them —
+in plain language, no menus — how they want you to work. Offer a few
+hints, one short line each: the pinned-but-not-installed modules are
+{mods} (read modules.lock and each module's repo for details); channels
+like telegram are modules too. If they want nothing, that's a great
+answer — stay minimal. Keep it short and warm. {powers} Their reply comes
+through this same conversation."""
+
+POWERS_CLAUDE = """You run on the claude engine, so you have real tools:
+whatever they ask for, install and wire it yourself per skills/module
+(audit first, verify after)."""
+
+POWERS_CHAT = """You run on a chat engine ({eng}) — you have NO tools this
+session: never pretend to run commands or invent output. When they want
+something installed, give them the exact commands to run themselves
+(tools/module add <name>; config lines for the gitignored .env), and note
+that the claude engine is the only one that can act on its own."""
+
+
+def bootstrap_claude():
+    claude = find_claude()
+    if not claude:
+        ans = ask("install Claude Code now? (official installer, "
+                  "https://claude.ai/install.sh) [Y/n]: ")
+        # empty answer means yes only on a real keyboard — a piped/EOF run
+        # must never curl|bash by default
+        if not (ans.lower().startswith("y")
+                or (ans == "" and sys.stdin.isatty())):
+            return None
+        if subprocess.call("curl -fsSL https://claude.ai/install.sh | bash",
+                           shell=True) != 0:
+            print("installer failed — see https://docs.claude.com/en/docs/claude-code")
+            return None
+        claude = find_claude()
+        if not claude:
+            print("installer left no runnable `claude` — see the docs above")
+            return None
+    os.environ["CLAUDE_BIN"] = claude
+    if not shutil.which("claude"):
+        env_write(CLAUDE_BIN=claude)   # engine reads .env; PATH not required
+        print(f"claude: using {claude} (saved as CLAUDE_BIN in .env)")
+    return claude
+
+
+def bootstrap_ollama(models):
+    if not models:
+        print("\nOllama isn't running here yet. Install + get a model "
+              "(free, fully local):")
+        print("  macOS:  brew install ollama   ·   Linux:  curl -fsSL "
+              "https://ollama.com/install.sh | sh")
+        print("  then:   ollama pull qwen3:4b     # smallest model that "
+              "works as an agent")
+        print("re-run ./setup once `ollama list` shows a model.")
+        return False
+    # measured floor (see engine-ollama MODULE.md): 4b is the smallest model
+    # that actually works as an agent; never default below it
+    pref = ("qwen3:4b", "qwen3:8b", "qwen3:14b")
+    default = next((m for m in pref if m in models),
+                   next((m for m in models if m.startswith("qwen")
+                         and "1.7b" not in m), models[0]))
+    model = ask(f"which model? {', '.join(models[:8])} [{default}]: ", default)
+    if not module_add("engine-ollama"):
+        print("couldn't install engine-ollama (network? modules.lock?)")
+        return False
+    env_write(ENGINE="engine-ollama", OLLAMA_ENGINE_MODEL=model)
+    print(f"engine: engine-ollama · {model} — local, free, chat-only "
+          "(OLLAMA_ENGINE_TOOLS=bash exists; read its MODULE.md first)")
+    return True
+
+
+def bootstrap_oai():
+    base = ask("API base URL [https://openrouter.ai/api/v1]: ",
+               "https://openrouter.ai/api/v1")
+    key = ask("API key: ")
+    if not key:
+        print("no key — nothing to wire")
+        return False
+    model = ask("model id (e.g. qwen/qwen3-coder): ")
+    if not module_add("engine-oai"):
+        print("couldn't install engine-oai (network? modules.lock?)")
+        return False
+    env_write(ENGINE="engine-oai", OAI_ENGINE_BASE_URL=base,
+              OAI_ENGINE_API_KEY=key, OAI_ENGINE_MODEL=model or "")
+    print("engine: engine-oai — metered API, chat-only (key stays in the "
+          "gitignored .env)")
+    return True
 
 
 def main():
-    print("claude-p-agent setup — an agent is `claude -p` in a directory,")
+    print("claude-p-agent setup — an agent is a brain in a directory,")
     print("with a persona and tools. The engine is agent.py; audit it first.\n")
 
     # 1. persona — the one typed question
@@ -74,11 +202,7 @@ def main():
     if os.path.isfile(persona):
         print("persona: CLAUDE.md already exists — keeping it")
     else:
-        try:
-            name = (input("What should your agent be called? [Agent]: ")
-                    .strip() or "Agent")
-        except EOFError:
-            name = "Agent"
+        name = ask("What should your agent be called? [Agent]: ", "Agent")
         with open(os.path.join(HERE, "CLAUDE.md.example"), encoding="utf-8") as f:
             text = f.read()
         text = text.split("-->", 1)[-1].lstrip()          # drop template banner
@@ -86,33 +210,77 @@ def main():
             f.write(text.replace("<AGENT NAME>", name))
         print(f"persona: wrote CLAUDE.md — your agent is {name!r} (edit anytime)")
 
-    # 2. the engine must exist before anyone can talk
-    if not shutil.which(os.environ.get("CLAUDE_BIN", "claude")):
-        print("\nNo `claude` CLI found. Install it and sign in to a Claude")
-        print("subscription (https://docs.claude.com/en/docs/claude-code),")
-        print("then re-run ./setup — your agent will take it from there.")
-        return 0
+    # 2. some brain must be runnable — Claude Code is the default, not a dependency
+    engine = os.environ.get("ENGINE")                 # respect an existing .env
+    if not engine:
+        claude = find_claude()
+        if claude:
+            os.environ["CLAUDE_BIN"] = claude
+            engine = "claude"
+            print("engine: claude (found the CLI — full body: tools, "
+                  "self-editing)")
+        else:
+            models = probe_ollama()
+            print("\nNo Claude Code here. Your agent needs a brain — any of:")
+            print("  [c] Claude Code — the full body; needs a Claude "
+                  "subscription (default)")
+            print("  [o] local Ollama — free, private"
+                  + (f"; running with {len(models)} model(s)" if models
+                     else "; not running yet"))
+            print("  [k] any OpenAI-style API key — OpenRouter, Groq, …")
+            pick = ask("which? [c/o/k]: ", "c").lower()[:1]
+            if pick == "o":
+                if not bootstrap_ollama(models):
+                    return 0
+                engine = "engine-ollama"
+            elif pick == "k":
+                if not bootstrap_oai():
+                    return 0
+                engine = "engine-oai"
+            else:
+                if not bootstrap_claude():
+                    print("re-run ./setup anytime — or pick [o]/[k] next time.")
+                    return 0
+                engine = "claude"
 
     # 3. hand over to the agent — the rest of setup is a conversation
     if not sys.stdin.isatty():
         print("\n(non-interactive run: skipping the first conversation — "
               "run ./tui.sh to talk)")
         return 0
-    kicked = os.path.isfile(os.path.join(HERE, ".memory", "main.session"))
+    mem = os.path.join(HERE, ".memory")
+    kicked = any(f.startswith(("main.", "main@"))
+                 for f in (os.listdir(mem) if os.path.isdir(mem) else []))
     if not kicked:
         print("\nwaking your agent (one moment)…\n")
         sys.path.insert(0, HERE)
         from agent import run_turn
-        mods = ", ".join(read_lock_names()) or "none yet"
+        eng = os.environ.get("ENGINE") or engine or "claude"
+        mods = ", ".join(n for n, _u, _s in read_lock()) or "none yet"
+        powers = POWERS_CLAUDE if eng == "claude" else POWERS_CHAT.format(eng=eng)
+        # owner's console: full hands on claude (guard hook still fires);
+        # external engines take no claude CLI flags
+        extra = (["--permission-mode", "bypassPermissions"]
+                 if eng == "claude" else None)
         try:
-            # owner's console: full hands, same as the TUI (guard hook still fires)
-            reply = run_turn(KICKOFF.format(mods=mods), remember="main",
-                             extra_args=["--permission-mode", "bypassPermissions"])
-            print(render(reply))
+            print(render(run_turn(KICKOFF.format(mods=mods, powers=powers),
+                                  remember="main", extra_args=extra)))
         except Exception as e:
-            print(f"[error] first turn failed: {e}", file=sys.stderr)
-            print("fix the above, then: ./tui.sh --remember main")
-            return 1
+            if eng == "claude" and find_claude():
+                print("\nThat failed — most likely you're not signed in yet.")
+                print("Opening Claude Code for a one-time login: complete the")
+                print("browser sign-in, then EXIT it (/exit) to continue.\n")
+                subprocess.call([os.environ.get("CLAUDE_BIN", "claude")])
+                try:
+                    print(render(run_turn(
+                        KICKOFF.format(mods=mods, powers=powers),
+                        remember="main", extra_args=extra)))
+                except Exception as e2:
+                    print(f"[error] still failing: {e2}", file=sys.stderr)
+                    return 1
+            else:
+                print(f"[error] first turn failed: {e}", file=sys.stderr)
+                return 1
     print("\n(answer in the prompt below — same conversation, key 'main')\n")
     tui = os.path.join(HERE, "tui.sh")
     os.execv(tui, [tui, "--remember", "main"])

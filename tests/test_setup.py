@@ -25,10 +25,26 @@ class TestSetup(unittest.TestCase):
                 persona = f.read()
             self.assertIn("You are TestBot", persona)
             self.assertNotIn("<!--", persona)             # banner stripped
-            # piped stdin → no first conversation, no claude spawn, no modules
+            # piped stdin → no first conversation, no engine spawn, no modules
             self.assertIn("skipping the first conversation", r.stdout)
             self.assertFalse(os.path.isdir(os.path.join(tmp, "modules")))
             self.assertFalse(os.path.isdir(os.path.join(tmp, ".memory")))
+
+    def test_no_claude_machine_offers_other_brains(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for rel in ("setup", "CLAUDE.md.example", "modules.lock"):
+                shutil.copy(os.path.join(HOME, rel), tmp)
+            env = {k: v for k, v in os.environ.items()
+                   if k not in ("CLAUDE_BIN",)}
+            env["HOME"] = tmp                      # hide ~/.local/bin/claude
+            env["PATH"] = "/usr/bin:/bin"
+            r = subprocess.run([sys.executable, os.path.join(tmp, "setup")],
+                               input="Bot\nn\n", capture_output=True,
+                               text=True, cwd=tmp, env=env, timeout=60)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("Your agent needs a brain", r.stdout)
+            self.assertIn("[o] local Ollama", r.stdout)
+            self.assertIn("[k] any OpenAI-style API key", r.stdout)
 
             r2 = self.run_setup(tmp, "")
             self.assertEqual(r2.returncode, 0, r2.stderr)
