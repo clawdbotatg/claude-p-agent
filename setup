@@ -354,15 +354,15 @@ def main():
         else:
             models = probe_ollama()
             print("\nNo Claude Code here. Your agent needs a brain — any of:")
+            print("  [s] scan this machine for anything usable (default)")
             print("  [c] Claude Code — the full body; needs a Claude "
-                  "subscription (default)")
+                  "subscription")
+            print("  [g] OpenAI — Codex / GPT models (API key)")
             print("  [o] local Ollama — free, private"
                   + (f"; running with {len(models)} model(s)" if models
                      else "; not running yet"))
-            print("  [g] OpenAI — Codex / GPT models (API key)")
             print("  [k] any OpenAI-style API key — OpenRouter, Groq, …")
-            print("  [s] scan this machine for anything usable")
-            pick = ask("which? [c/o/g/k/s]: ", "c").lower()[:1]
+            pick = ask("which? [s/c/g/o/k]: ", "s").lower()[:1]
             if pick == "s":
                 engine = bootstrap_from_scan()
                 if not engine:
