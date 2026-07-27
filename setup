@@ -22,6 +22,23 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
+def render(text):
+    """Show the agent's reply the way the TUI would (markdown → ANSI)."""
+    try:
+        import importlib.machinery
+        import importlib.util
+        loader = importlib.machinery.SourceFileLoader(
+            "clawd_cli", os.path.join(HERE, "adapters", "cli.py"))
+        spec = importlib.util.spec_from_loader("clawd_cli", loader)
+        cli = importlib.util.module_from_spec(spec)
+        loader.exec_module(cli)
+        if sys.stdout.isatty():
+            return cli.render_markdown(text)
+    except Exception:
+        pass
+    return text
+
+
 def read_lock_names():
     names = []
     try:
@@ -89,8 +106,9 @@ def main():
         mods = ", ".join(read_lock_names()) or "none yet"
         try:
             # owner's console: full hands, same as the TUI (guard hook still fires)
-            print(run_turn(KICKOFF.format(mods=mods), remember="main",
-                           extra_args=["--permission-mode", "bypassPermissions"]))
+            reply = run_turn(KICKOFF.format(mods=mods), remember="main",
+                             extra_args=["--permission-mode", "bypassPermissions"])
+            print(render(reply))
         except Exception as e:
             print(f"[error] first turn failed: {e}", file=sys.stderr)
             print("fix the above, then: ./tui.sh --remember main")
