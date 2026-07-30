@@ -110,6 +110,16 @@ process importing the engine, trust-tagged channel policy via
   llama.cpp, vLLM are all just `.env` configs for `engine-oai` — document
   copy-paste blocks in engine-oai's MODULE.md instead of cloning it.
 
+## The name (parked decision)
+
+Everything is `claude-p-*` until the project gets its real name. Shortlist
+(from the original plan): **goober** (peanut — humble, resilient; Carver's
+300 uses = one core, many modules; an npm CSS-in-JS lib shares the name,
+different ecosystem), **tater**, **skosh** ("a little," from Japanese
+*sukoshi*), **hitode** (starfish — decentralized, regenerating; written
+人手, "human hand"), **fugue** (one theme, self-imitating voices; the
+waking amnesiac). Module prefix and registry topic follow the name.
+
 ## Notes that apply to all of these
 
 - Money- or credential-touching modules (`wallet`, `email`) must lead

@@ -79,12 +79,13 @@ def cmd_status():
 
 # ── drift ────────────────────────────────────────────────────────────────────
 
-CORE_DOCS = ["README.md", "ARCHITECTURE.md", "PLAN.md", "tools/README.md",
-             "adapters/README.md"]
+CORE_DOCS = ["README.md", "ARCHITECTURE.md", "PLAN-ENGINES.md",
+             "TODO-MODULES.md", "tools/README.md", "adapters/README.md"]
 PATH_RE = re.compile(
     r"`((?:tools|skills|adapters|tests|docs)/[A-Za-z0-9._/-]+"
     r"|agent\.py|tui\.sh|modules\.lock|hooks\.base\.json"
-    r"|CLAUDE\.md\.example|ARCHITECTURE\.md|README\.md|PLAN\.md)`")
+    r"|CLAUDE\.md\.example|ARCHITECTURE\.md|README\.md|PLAN-ENGINES\.md"
+    r"|TODO-MODULES\.md)`")
 
 
 def doc_files():
