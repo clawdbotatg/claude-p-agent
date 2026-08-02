@@ -8,5 +8,5 @@ cron  https://github.com/clawdbotatg/claude-p-cron.git  @ 4368e8c9f67bf3b8ad7834
 engine-oai  https://github.com/clawdbotatg/claude-p-engine-oai.git  @ e3e156e27911422dc4a2813eb621418c3ade9144
 engine-ollama  https://github.com/clawdbotatg/claude-p-engine-ollama.git  @ 3d9ab14eed79f134a2fca49c3f38bf7535cbbbdd
 ipfs  https://github.com/clawdbotatg/claude-p-ipfs.git  @ 79513c220d89b01f986f2e545354f707279d4ccc
-router  https://github.com/clawdbotatg/claude-p-router.git  @ bf4a5e889f0a1d77474f77681e942dd36838d514
+router  https://github.com/clawdbotatg/claude-p-router.git  @ 340f7964c1668ed0c0cb7747d034b81dba8ca82f
 telegram  https://github.com/clawdbotatg/claude-p-telegram.git  @ 24e7d76d9d07a9126f6488cb70f444c3d2e909cb
