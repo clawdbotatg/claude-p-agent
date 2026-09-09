@@ -617,6 +617,7 @@ def _run_streaming(cmd, text, cwd, on_event, track_session, input_via="argv",
     err_thread.start()
 
     final = ""
+    result_err = ""   # claude puts auth/limit errors in the result event, not stderr
     try:
         for line in proc.stdout:
             line = line.strip()
@@ -628,6 +629,8 @@ def _run_streaming(cmd, text, cwd, on_event, track_session, input_via="argv",
                 continue
             if event.get("type") == "result":
                 final = (event.get("result") or "").strip()
+                if event.get("is_error"):
+                    result_err = final or str(event.get("error") or event.get("subtype") or "")
             track_session(event)
             try:
                 on_event(event)
@@ -644,7 +647,7 @@ def _run_streaming(cmd, text, cwd, on_event, track_session, input_via="argv",
     finally:
         err_thread.join(timeout=1)
     if proc.returncode != 0:
-        err = "".join(stderr_chunks).strip()
+        err = "".join(stderr_chunks).strip() or result_err
         raise RuntimeError(f"claude exited {proc.returncode}: {err}")
     return final
 
