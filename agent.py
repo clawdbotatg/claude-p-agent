@@ -287,6 +287,42 @@ def _read_session(path):
         return None
 
 
+def _ensure_resumable(session_id, env):
+    """Make `--resume session_id` work under whatever login env resolved to.
+
+    The router swaps CLAUDE_CONFIG_DIR per turn, and claude only looks for the
+    transcript under THAT dir's projects/. Most login dirs symlink projects/ to
+    ~/.claude/projects, but one with a real projects/ dir can't see a
+    transcript written under another login — and every remembered turn then
+    dies on "No conversation found" (clawd-twitter's daemon, 2026-09-24).
+    So: found where claude will look → resume. Found under another login →
+    symlink it (+ its subagents dir) across, then resume. Found nowhere →
+    say so on stderr and start fresh rather than fail every turn forever."""
+    if not session_id:
+        return None
+    home = os.path.expanduser("~/.claude")
+    dst = os.path.abspath(os.path.expanduser(env.get("CLAUDE_CONFIG_DIR") or home))
+    name = f"{session_id}.jsonl"
+    if glob.glob(os.path.join(dst, "projects", "*", name)):
+        return session_id
+    roots = {home, *glob.glob(os.path.join(os.path.dirname(dst), "*"))}
+    for root in sorted(roots - {dst}):
+        for hit in glob.glob(os.path.join(root, "projects", "*", name)):
+            rel = os.path.relpath(hit, root)
+            try:
+                for src in (hit, hit[:-len(".jsonl")]):
+                    link = os.path.join(dst, os.path.relpath(src, root))
+                    if os.path.exists(src) and not os.path.lexists(link):
+                        os.makedirs(os.path.dirname(link), exist_ok=True)
+                        os.symlink(src, link)
+                return session_id
+            except OSError as e:
+                print(f"[resume] can't link {rel} into {dst}: {e}", file=sys.stderr)
+    print(f"[resume] no transcript for {session_id} under any login — starting fresh",
+          file=sys.stderr)
+    return None
+
+
 def _write_session(path, sid):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -525,17 +561,6 @@ def run_turn(
     if capture_blocking and "--output-format" not in extra_args:
         extra_args += ["--output-format", "json"]
 
-    flags = _build_flags(
-        append_system_prompt=append_system_prompt,
-        session_id=session_id,
-        add_dirs=add_dirs,
-        extra_args=extra_args,
-        stream=stream,
-    )
-    cmd = _claude_cmd(text, flags, input_via=input_via)
-
-    meta = {"session_id": session_id}
-
     def _track_session(event):
         et = event.get("type")
         if et == "system" and event.get("subtype") == "init":
@@ -551,6 +576,18 @@ def run_turn(
     if remember:
         turn_env["CLAUDE_P_REMEMBER"] = str(remember)
     env = _child_env(auto_memory, turn_env)
+    session_id = _ensure_resumable(session_id, env)
+
+    flags = _build_flags(
+        append_system_prompt=append_system_prompt,
+        session_id=session_id,
+        add_dirs=add_dirs,
+        extra_args=extra_args,
+        stream=stream,
+    )
+    cmd = _claude_cmd(text, flags, input_via=input_via)
+
+    meta = {"session_id": session_id}
 
     if stream:
         final = _run_streaming(
