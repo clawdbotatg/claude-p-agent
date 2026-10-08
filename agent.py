@@ -61,11 +61,16 @@ AGENT_DIR = os.path.abspath(os.environ.get("AGENT_DIR", agent_home()))
 # the child detects "embedded" mode → metered API billing, no transcript.
 SCRUB_PREFIXES = ("CLAUDECODE", "CLAUDE_CODE_")
 SCRUB_EXACT = {"ANTHROPIC_API_KEY", "AI_AGENT"}
+# ...except the subscription setup-token: it's how a token account signs in
+# (no login in its config dir), not an embedded-mode marker.
+SCRUB_KEEP = {"CLAUDE_CODE_OAUTH_TOKEN"}
 
 
 def scrubbed_env():
     env = dict(os.environ)
     for k in list(env):
+        if k in SCRUB_KEEP:
+            continue
         if k in SCRUB_EXACT or any(k.startswith(p) for p in SCRUB_PREFIXES):
             env.pop(k, None)
     return env
